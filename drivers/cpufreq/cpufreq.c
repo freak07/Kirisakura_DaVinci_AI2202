@@ -33,28 +33,43 @@
 #include <trace/hooks/cpufreq.h>
 
 /*
-XQ-CT54:/ # cat sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies
-* 307200 403200 518400 614400 729600 844800 960000 1075200 1171200 1267200 1363200 1478400 1574400 1689600 1785600
-XQ-CT54:/ # cat sys/devices/system/cpu/cpufreq/policy4/scaling_available_frequencies
-633600 768000 883200 998400 1113600 1209600 1324800 1440000 1555200 1651200 1766400 1881600 1996800 2112000 2227200 2342400 2419200
-XQ-CT54:/ # cat sys/devices/system/cpu/cpufreq/policy7/scaling_available_frequencies
-806400 940800 1056000 1171200 1286400 1401600 1497600 1612800 1728000 1843200 1958400 2054400 2169600 2284800 2400000 2515200 2630400 2726400 2822400 2841600
+ASUS_AI2202:/ # cat sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies
+307200 441600 556800 691200 806400 940800 1056000 1132800 1228800 1324800 1440000 1555200 1670400 1804800 1920000 2016000 
+ASUS_AI2202:/ # cat sys/devices/system/cpu/cpufreq/policy4/scaling_available_frequencies                                                                                                                                                                                      
+633600 768000 883200 998400 1113600 1209600 1324800 1440000 1555200 1651200 1766400 1881600 1996800 2112000 2227200 2342400 2457600 2572800 2649600 2745600 
+ASUS_AI2202:/ # cat sys/devices/system/cpu/cpufreq/policy7/scaling_available_frequencies                                                                                                                                                                                      
+787200 921600 1036800 1171200 1286400 1401600 1536000 1651200 1766400 1881600 1996800 2131200 2246400 2361600 2476800 2592000 2707200 2822400 2918400 2995200 
 */
 
 // saver 1
-#define LVL1_LITTLE 1689600
-#define LVL1_BIG    1996800
-#define LVL1_PRIME  2284800
+#define LVL1_LITTLE 1804800
+#define LVL1_BIG    2649600
+#define LVL1_PRIME  2822400
 
 // saver 2
-#define LVL2_LITTLE 1478400
-#define LVL2_BIG    1651200
-#define LVL2_PRIME  1843200
+#define LVL2_LITTLE 1670400
+#define LVL2_BIG    2572800
+#define LVL2_PRIME  2592000
 
 // saver 3
-#define LVL3_LITTLE 1171200
-#define LVL3_BIG    1113600
-#define LVL3_PRIME  1171200
+#define LVL3_LITTLE 1555200
+#define LVL3_BIG    2227200
+#define LVL3_PRIME  2361600
+
+// saver 4
+#define LVL4_LITTLE 1440000
+#define LVL4_BIG    1996800
+#define LVL4_PRIME  1996800
+
+// saver 5
+#define LVL5_LITTLE 1228800
+#define LVL5_BIG    1440000
+#define LVL5_PRIME  1536000
+
+// saver 6
+#define LVL6_LITTLE 1132800
+#define LVL6_BIG    1113600
+#define LVL6_PRIME  1171200
 
 static int batterysaver = 0; // 0 - 1 - 3
 module_param(batterysaver, int, 0644);
@@ -64,7 +79,7 @@ static int batterysaver_level = 0; // 0 - 1 - 3
 module_param(batterysaver_level, int, 0644);
 static bool batterysaver_touch_limiting = true;
 module_param(batterysaver_touch_limiting, bool, 0644);
-#define BATTERY_SAVER_MAX_LEVEL 3
+#define BATTERY_SAVER_MAX_LEVEL 6
 
 static LIST_HEAD(cpufreq_policy_list);
 
@@ -577,7 +592,19 @@ static int batterysaver_max_freqs[BATTERY_SAVER_MAX_LEVEL][8] = {
 	// saver 3
 	{ LVL3_LITTLE,LVL3_LITTLE,LVL3_LITTLE,LVL3_LITTLE,
 	LVL3_BIG,LVL3_BIG,LVL3_BIG,
-	LVL3_PRIME }
+	LVL3_PRIME },
+	// saver 4
+	{ LVL4_LITTLE,LVL4_LITTLE,LVL4_LITTLE,LVL4_LITTLE,
+	LVL4_BIG,LVL4_BIG,LVL4_BIG,
+	LVL4_PRIME },
+	// saver 5
+	{ LVL5_LITTLE,LVL5_LITTLE,LVL5_LITTLE,LVL5_LITTLE,
+	LVL5_BIG,LVL5_BIG,LVL5_BIG,
+	LVL5_PRIME },
+	// saver 6
+	{ LVL6_LITTLE,LVL6_LITTLE,LVL6_LITTLE,LVL6_LITTLE,
+	LVL6_BIG,LVL6_BIG,LVL6_BIG,
+	LVL6_PRIME }
 };
 
 static int get_cpu_max_for_core(unsigned int cpu, int batterysaverlevel) {
