@@ -1,4 +1,4 @@
-obj-y := dsp/ ipc/ soc/ asoc/ asoc/codecs/ asoc/codecs/lpass-cdc/ asoc/codecs/wsa883x/ asoc/codecs/wcd938x/ asoc/codecs/wcd937x/
+obj-y := dsp/ ipc/ soc/ asoc/
 
 ifeq ($(ASUS_AI2201_AUDIO), y)
 $(warning build audio cs35l45 in Kbuild for AI2201...)
