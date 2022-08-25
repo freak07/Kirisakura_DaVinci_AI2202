@@ -1,0 +1,18 @@
+obj-y := dsp/ ipc/ soc/ asoc/ asoc/codecs/ asoc/codecs/lpass-cdc/ asoc/codecs/wsa883x/ asoc/codecs/wcd938x/ asoc/codecs/wcd937x/
+
+ifeq ($(ASUS_AI2201_AUDIO), y)
+$(warning build audio cs35l45 in Kbuild for AI2201...)
+obj-y += asoc/codecs/cs35l45/
+
+KBUILD_CPPFLAGS += -DASUS_AI2201_PROJECT=1
+endif
+
+ifeq ($(ASUS_AI2202_AUDIO), y)
+$(warning build audio factory function in Kbuild for AI2202...)
+KBUILD_CPPFLAGS += -DASUS_AI2202_PROJECT=1
+endif
+
+ifeq ($(ASUS_FTM_AUDIO), y)
+$(warning build audio factory function in Kbuild for AI2201/AI2202...)
+KBUILD_CPPFLAGS += -DASUS_FTM_BUILD=1
+endif
