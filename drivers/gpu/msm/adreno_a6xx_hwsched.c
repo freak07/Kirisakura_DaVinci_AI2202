@@ -537,6 +537,14 @@ static int a6xx_hwsched_gpu_boot(struct adreno_device *adreno_dev)
 		goto err;
 	}
 
+	/*
+	 * At this point it is safe to assume that we recovered. Setting
+	 * this field allows us to take a new snapshot for the next failure
+	 * if we are prioritizing the first unrecoverable snapshot.
+	 */
+	if (device->snapshot)
+		device->snapshot->recovered = true;
+
 	device->reset_counter++;
 err:
 	a6xx_gmu_oob_clear(device, oob_gpu);
@@ -766,6 +774,9 @@ no_gx_power:
 	if (!IS_ERR_OR_NULL(adreno_dev->gpuhtw_llc_slice))
 		llcc_slice_deactivate(adreno_dev->gpuhtw_llc_slice);
 
+	if (!IS_ERR_OR_NULL(adreno_dev->gpumv_llc_slice))
+		llcc_slice_deactivate(adreno_dev->gpumv_llc_slice);
+
 	clear_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);
 
 	device->state = KGSL_STATE_NONE;
@@ -924,17 +935,17 @@ static void scale_gmu_frequency(struct adreno_device *adreno_dev, int buslevel)
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
 	static unsigned long prev_freq;
-	unsigned long freq = GMU_FREQ_MIN;
+	unsigned long freq = gmu->freqs[0];
 
 	if (!gmu->perf_ddr_bw)
 		return;
 
 	/*
 	 * Scale the GMU if DDR is at a CX corner at which GMU can run at
-	 * 500 Mhz
+	 * a higher frequency
 	 */
 	if (pwr->ddr_table[buslevel] >= gmu->perf_ddr_bw)
-		freq = GMU_FREQ_MAX;
+		freq = gmu->freqs[GMU_MAX_PWRLEVELS - 1];
 
 	if (prev_freq == freq)
 		return;

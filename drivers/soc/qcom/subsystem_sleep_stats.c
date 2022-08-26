@@ -208,21 +208,23 @@ static int subsystem_sleep_stats(struct sleep_stats_data *stats_data, struct sle
 bool has_system_slept(void)
 {
 	int i;
+	bool sleep_flag = true;
 
 	for (i = 0; i < ARRAY_SIZE(system_stats); i++) {
 		if (b_system_stats[i].count == a_system_stats[i].count) {
 			pr_info("System %s has not entered sleep\n", system_stats[i].name);
-			return false;
+			sleep_flag = false;
 		}
 	}
 
-	return true;
+	return sleep_flag;
 }
 EXPORT_SYMBOL(has_system_slept);
 
 bool has_subsystem_slept(void)
 {
 	int i;
+	bool sleep_flag = true;
 
 	for (i = 0; i < ARRAY_SIZE(subsystem_stats); i++) {
 		if (subsystem_stats[i].not_present)
@@ -232,11 +234,11 @@ bool has_subsystem_slept(void)
 			(a_subsystem_stats[i].last_exited_at >
 				a_subsystem_stats[i].last_entered_at)) {
 			pr_info("Subsystem %s has not entered sleep\n", subsystem_stats[i].name);
-			return false;
+			sleep_flag = false;
 		}
 	}
 
-	return true;
+	return sleep_flag;
 }
 EXPORT_SYMBOL(has_subsystem_slept);
 
@@ -430,19 +432,19 @@ static int subsystem_stats_probe(struct platform_device *pdev)
 	config = device_get_match_data(&pdev->dev);
 	if (!config) {
 		ret = -ENODEV;
-		goto fail_device_create;
+		goto fail;
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
 		ret = PTR_ERR(res);
-		goto fail_device_create;
+		goto fail;
 	}
 
 	offset_addr = devm_ioremap(&pdev->dev, res->start + config->offset_addr, sizeof(u32));
 	if (IS_ERR(offset_addr)) {
 		ret = PTR_ERR(offset_addr);
-		goto fail_device_create;
+		goto fail;
 	}
 
 	stats_base = res->start | readl_relaxed(offset_addr);
@@ -451,7 +453,7 @@ static int subsystem_stats_probe(struct platform_device *pdev)
 	stats_data->reg_base = devm_ioremap(&pdev->dev, stats_base, stats_size);
 	if (!stats_data->reg_base) {
 		ret = -ENOMEM;
-		goto fail_device_create;
+		goto fail;
 	}
 
 	stats_data->config = devm_kcalloc(&pdev->dev, config->num_records,
@@ -469,26 +471,26 @@ static int subsystem_stats_probe(struct platform_device *pdev)
 	offset_addr = devm_ioremap(&pdev->dev, res->start + config->ddr_offset_addr, sizeof(u32));
 	if (IS_ERR(offset_addr)) {
 		ret = PTR_ERR(offset_addr);
-		goto fail_device_create;
+		goto fail;
 	}
 
 	stats_base = res->start | readl_relaxed(offset_addr);
 	stats_data->ddr_reg = devm_ioremap(&pdev->dev, stats_base, stats_size);
 	if (!stats_data->ddr_reg) {
 		ret = -ENOMEM;
-		goto fail_device_create;
+		goto fail;
 	}
 
 	stats_data->ddr_key = readl_relaxed(stats_data->ddr_reg + DDR_STATS_MAGIC_KEY_ADDR);
 	if (stats_data->ddr_key != DDR_STATS_MAGIC_KEY) {
 		ret = -EINVAL;
-		goto fail_device_create;
+		goto fail;
 	}
 
 	stats_data->ddr_entry_count = readl_relaxed(stats_data->ddr_reg + DDR_STATS_NUM_MODES_ADDR);
 	if (stats_data->ddr_entry_count > DDR_STATS_MAX_NUM_MODES) {
 		ret = -EINVAL;
-		goto fail_device_create;
+		goto fail;
 	}
 
 	subsystem_stats_debug_on = false;
@@ -509,6 +511,8 @@ static int subsystem_stats_probe(struct platform_device *pdev)
 
 	return 0;
 
+fail:
+	device_destroy(stats_data->stats_class, stats_data->dev_no);
 fail_device_create:
 	class_destroy(stats_data->stats_class);
 fail_class_create:
@@ -527,6 +531,7 @@ static int subsystem_stats_remove(struct platform_device *pdev)
 	if (!stats_data)
 		return 0;
 
+	device_destroy(stats_data->stats_class, stats_data->dev_no);
 	class_destroy(stats_data->stats_class);
 	cdev_del(&stats_data->stats_cdev);
 	unregister_chrdev_region(stats_data->dev_no, 1);
@@ -545,7 +550,7 @@ static int subsytem_stats_suspend(struct device *dev)
 
 	mutex_lock(&sleep_stats_mutex);
 	for (i = 0; i < ARRAY_SIZE(subsystem_stats); i++) {
-		ret = subsystem_sleep_stats(stats_data, b_subsystem_stats,
+		ret = subsystem_sleep_stats(stats_data, b_subsystem_stats + i,
 					subsystem_stats[i].pid, subsystem_stats[i].smem_item);
 		if (ret == -ENODEV)
 			subsystem_stats[i].not_present = true;
@@ -554,7 +559,7 @@ static int subsytem_stats_suspend(struct device *dev)
 	}
 
 	for (i = 0; i < ARRAY_SIZE(system_stats); i++)
-		subsystem_sleep_stats(stats_data, b_system_stats,
+		subsystem_sleep_stats(stats_data, b_system_stats + i,
 					system_stats[i].pid, system_stats[i].smem_item);
 	mutex_unlock(&sleep_stats_mutex);
 
@@ -571,11 +576,11 @@ static int subsytem_stats_resume(struct device *dev)
 
 	mutex_lock(&sleep_stats_mutex);
 	for (i = 0; i < ARRAY_SIZE(subsystem_stats); i++)
-		subsystem_sleep_stats(stats_data, a_subsystem_stats,
+		subsystem_sleep_stats(stats_data, a_subsystem_stats + i,
 					subsystem_stats[i].pid, subsystem_stats[i].smem_item);
 
 	for (i = 0; i < ARRAY_SIZE(system_stats); i++)
-		subsystem_sleep_stats(stats_data, a_system_stats,
+		subsystem_sleep_stats(stats_data, a_system_stats + i,
 					system_stats[i].pid, system_stats[i].smem_item);
 	mutex_unlock(&sleep_stats_mutex);
 

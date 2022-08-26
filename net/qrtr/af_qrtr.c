@@ -2,6 +2,7 @@
 /*
  * Copyright (c) 2015, Sony Mobile Communications Inc.
  * Copyright (c) 2013, 2018-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #include <linux/kthread.h>
 #include <linux/module.h>
@@ -20,6 +21,7 @@
 #include <uapi/linux/sched/types.h>
 
 #include "qrtr.h"
+#include "debug.h"
 
 #define QRTR_LOG_PAGE_CNT 4
 #define QRTR_INFO(ctx, x, ...)				\
@@ -184,6 +186,8 @@ struct qrtr_node {
 
 	struct wakeup_source *ws;
 	void *ilc;
+
+	struct xarray no_wake_svc; /* services that will not wake up APPS */
 };
 
 struct qrtr_tx_flow_waiter {
@@ -864,6 +868,7 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 	unsigned int ver;
 	size_t hdrlen;
 	int errcode;
+	int svc_id;
 
 	if (len == 0 || len & 3)
 		return -EINVAL;
@@ -872,6 +877,7 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 	if (!skb) {
 		skb = qrtr_get_backup(len);
 		if (!skb) {
+			qrtr_log_skb_failure(data, len);
 			pr_err("qrtr: Unable to get skb with len:%lu\n", len);
 			return -ENOMEM;
 		}
@@ -944,10 +950,13 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 		qrtr_node_assign(node, le32_to_cpu(pkt->server.node));
 	}
 
+	if (cb->confirm_rx)
+		qrtr_log_resume_tx(cb->src_node, cb->src_port, RTX_SKB_ALLOC_SUCC);
 	qrtr_log_rx_msg(node, skb);
 	/* All control packets and non-local destined data packets should be
 	 * queued to the worker for forwarding handling.
 	 */
+	svc_id = qrtr_get_service_id(cb->src_node, cb->src_port);
 	if (cb->type != QRTR_TYPE_DATA || cb->dst_node != qrtr_local_nid) {
 		skb_queue_tail(&node->rx_queue, skb);
 		kthread_queue_work(&node->kworker, &node->read_data);
@@ -964,8 +973,8 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 			goto err;
 		}
 
-		/* Force wakeup for all packets except for sensors */
-		if (node->nid != 9)
+		/* Force wakeup based on services */
+		if (!xa_load(&node->no_wake_svc, svc_id))
 			pm_wakeup_ws_event(node->ws, qrtr_wakeup_ms, true);
 
 		qrtr_port_put(ipc);
@@ -1171,13 +1180,16 @@ static void qrtr_hello_work(struct kthread_work *work)
  * @ep: endpoint to register
  * @nid: desired node id; may be QRTR_EP_NID_AUTO for auto-assignment
  * @rt: flag to notify real time low latency endpoint
+ * @no_wake: array of services to not wake up
  * Return: 0 on success; negative error code on failure
  *
  * The specified endpoint must have the xmit function pointer set on call.
  */
 int qrtr_endpoint_register(struct qrtr_endpoint *ep, unsigned int net_id,
-			   bool rt)
+			   bool rt, struct qrtr_array *no_wake)
 {
+	int rc, i;
+	size_t size;
 	struct qrtr_node *node;
 	struct sched_param param = {.sched_priority = 1};
 
@@ -1206,6 +1218,17 @@ int qrtr_endpoint_register(struct qrtr_endpoint *ep, unsigned int net_id,
 	}
 	if (rt)
 		sched_setscheduler(node->task, SCHED_FIFO, &param);
+
+	xa_init(&node->no_wake_svc);
+	size = no_wake ? no_wake->size : 0;
+	for (i = 0; i < size; i++) {
+		rc = xa_insert(&node->no_wake_svc, no_wake->arr[i], node,
+			       GFP_KERNEL);
+		if (rc) {
+			kfree(node);
+			return rc;
+		}
+	}
 
 	mutex_init(&node->qrtr_tx_lock);
 	INIT_RADIX_TREE(&node->qrtr_tx_flow, GFP_KERNEL);
@@ -1329,7 +1352,7 @@ void qrtr_endpoint_unregister(struct qrtr_endpoint *ep)
 
 	/* Wake up any transmitters waiting for resume-tx from the node */
 	wake_up_interruptible_all(&node->resume_tx);
-
+	qrtr_log_resume_tx_node_erase(node->nid);
 	qrtr_node_release(node);
 	ep->node = NULL;
 }
@@ -1382,6 +1405,9 @@ static void qrtr_send_del_client(struct qrtr_sock *ipc)
 	pkt->cmd = cpu_to_le32(QRTR_TYPE_DEL_CLIENT);
 	pkt->client.node = cpu_to_le32(ipc->us.sq_node);
 	pkt->client.port = cpu_to_le32(ipc->us.sq_port);
+
+	qrtr_log_resume_tx(pkt->client.node, pkt->client.port,
+			   RTX_REMOVE_RECORD);
 
 	skb_set_owner_w(skb, &ipc->sk);
 
@@ -1788,6 +1814,8 @@ static int qrtr_send_resume_tx(struct qrtr_cb *cb)
 
 	skb = qrtr_alloc_ctrl_packet(&pkt);
 	if (!skb) {
+		qrtr_log_resume_tx(cb->src_node, cb->src_port,
+				   RTX_CTRL_SKB_ALLOC_FAIL);
 		qrtr_node_release(node);
 		return -ENOMEM;
 	}
@@ -1798,7 +1826,7 @@ static int qrtr_send_resume_tx(struct qrtr_cb *cb)
 
 	ret = qrtr_node_enqueue(node, skb, QRTR_TYPE_RESUME_TX,
 				&local, &remote, 0);
-
+	qrtr_log_resume_tx(cb->src_node, cb->src_port, RTX_SENT_ACK);
 	qrtr_node_release(node);
 
 	return ret;
@@ -2081,6 +2109,7 @@ static int __init qrtr_proto_init(void)
 	qrtr_ns_init();
 
 	qrtr_backup_init();
+	qrtr_debug_init();
 
 	return rc;
 }
@@ -2093,6 +2122,7 @@ static void __exit qrtr_proto_fini(void)
 	proto_unregister(&qrtr_proto);
 
 	qrtr_backup_deinit();
+	qrtr_debug_remove();
 }
 module_exit(qrtr_proto_fini);
 
