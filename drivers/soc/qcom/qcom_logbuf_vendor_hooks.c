@@ -40,7 +40,7 @@ static size_t print_time(u64 ts, char *buf, size_t buf_sz)
 				(unsigned long)ts, rem_nsec / 1000);
 }
 
-struct timezone sys_tz;
+extern struct timezone sys_tz;
 extern int nSuspendInProgress;
 //static struct workqueue_struct *ASUSEvtlog_workQueue;
 //static int g_hfileEvtlog = -MAX_ERRNO;
