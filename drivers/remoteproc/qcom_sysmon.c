@@ -14,6 +14,8 @@
 #include <linux/rpmsg.h>
 #include <trace/events/rproc_qcom.h>
 
+#include "linux/asusdebug.h"/*AS-K ASUS SSR and Debug - Save SSR inform to asusdebug+*/
+
 #include "qcom_common.h"
 
 #define SYSMON_NOTIF_TIMEOUT CONFIG_RPROC_SYSMON_NOTIF_TIMEOUT
@@ -68,6 +70,23 @@ struct qcom_sysmon {
 
 static DEFINE_MUTEX(sysmon_lock);
 static LIST_HEAD(sysmon_list);
+
+/*AS-K ASUS SSR and Debug+++*/
+#define MAX_SSR_REASON_LEN (128)
+static char *ssr_reason = NULL;
+module_param(ssr_reason, charp, 0444);
+#define SUBSYS_NAME_TAG "SUBSYS_NAME"/*Send SubSys UEvent+*/
+#define SUBSYS_REASON_TAG "SUBSYS_REASON"/*Send SubSys UEvent+*/
+
+void subsys_save_reason(const char *name, char *reason)/*Save SSR reason*/
+{
+
+	strlcpy(ssr_reason, reason, MAX_SSR_REASON_LEN);
+	ASUSEvtlog("[SSR]:%s %s\n", name, reason);/*Save SSR inform to ASUSEvtLog+*/
+	//SubSysHealthRecord("[SSR]:%s %s\n", name, reason);/*Save SSR inform to SubSysHealthRecord+*/
+}
+EXPORT_SYMBOL_GPL(subsys_save_reason);
+/*AS-K ASUS SSR and Debug---*/
 
 uint32_t qcom_sysmon_get_txn_id(struct qcom_sysmon *sysmon)
 {
@@ -570,6 +589,16 @@ static int sysmon_start(struct rproc_subdev *subdev)
 						  subdev);
 	struct qcom_sysmon *target;
 
+	/*AS-K ASUS SSR and Debug+++*/
+	char mName_Buf[64];
+	char mReason_Buf[512];
+	char *envp[] = {mName_Buf, mReason_Buf, NULL};
+
+	snprintf(mName_Buf, sizeof(mName_Buf), "%s=%s", SUBSYS_NAME_TAG, sysmon->rproc->name);
+	snprintf(mReason_Buf, sizeof(mReason_Buf), "%s=[SSR]:%s %s", SUBSYS_REASON_TAG, sysmon->rproc->name, ssr_reason);
+	kobject_uevent_env(&(sysmon->dev->kobj), KOBJ_ONLINE, envp);
+	/*AS-K ASUS SSR and Debug---*/
+
 	trace_rproc_qcom_event(dev_name(sysmon->rproc->dev.parent), SYSMON_SUBDEV_NAME, "start");
 
 	mutex_lock(&sysmon->state_lock);
@@ -826,6 +855,10 @@ struct qcom_sysmon *qcom_add_sysmon_subdev(struct rproc *rproc,
 	int ret;
 
 	sysmon = kzalloc(sizeof(*sysmon), GFP_KERNEL);
+
+	/*AS-K ASUS SSR and Debug+++*/
+	ssr_reason = kzalloc(sizeof(char) * MAX_SSR_REASON_LEN, GFP_KERNEL);
+	/*AS-K ASUS SSR and Debug---*/
 	if (!sysmon)
 		return ERR_PTR(-ENOMEM);
 

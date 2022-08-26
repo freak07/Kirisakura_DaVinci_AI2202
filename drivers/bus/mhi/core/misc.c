@@ -16,11 +16,17 @@
 #include <linux/wait.h>
 #include "internal.h"
 
+
 #ifdef CONFIG_MHI_BUS_DEBUG
 #define MHI_MISC_DEBUG_LEVEL MHI_MSG_LVL_VERBOSE
 #else
 #define MHI_MISC_DEBUG_LEVEL MHI_MSG_LVL_ERROR
 #endif
+
+#define SUBSYS_NAME_TAG "SUBSYS_NAME"/*Send SubSys UEvent+*/
+#define SUBSYS_REASON_TAG "SUBSYS_REASON"/*Send SubSys UEvent+*/
+
+extern void subsys_save_reason(const char *name, char *reason);/*AS-K ASUS SSR and Debug+*/
 
 const char * const mhi_log_level_str[MHI_MSG_LVL_MAX] = {
 	[MHI_MSG_LVL_VERBOSE] = "Verbose",
@@ -782,6 +788,11 @@ static void mhi_process_sfr(struct mhi_controller *mhi_cntrl,
 	u32 file_size = info->file_size;
 	u32 rem_seg_len = info->rem_seg_len;
 	u32 seg_idx = info->seg_idx;
+	/*AS-K ASUS SSR and Debug+++*/
+	char mName_Buf[64];
+	char mReason_Buf[512];
+	char *envp[] = {mName_Buf, mReason_Buf, NULL };
+	/*AS-K ASUS SSR and Debug---*/
 
 	sfr_buf = kzalloc(file_size + 1, GFP_KERNEL);
 	if (!sfr_buf)
@@ -816,6 +827,12 @@ static void mhi_process_sfr(struct mhi_controller *mhi_cntrl,
 
 	/* force sfr string to log in kernel msg */
 	MHI_ERR("%s\n", sfr_buf);
+
+	snprintf(mName_Buf, sizeof(mName_Buf), "%s=wlan", SUBSYS_NAME_TAG);
+	snprintf(mReason_Buf, sizeof(mReason_Buf), "%s=[SSR]:wlan %s", SUBSYS_REASON_TAG, sfr_buf);
+	kobject_uevent_env(&dev->kobj, KOBJ_CHANGE, envp);
+	subsys_save_reason("wlan", sfr_buf );
+
 err:
 	kfree(sfr_buf);
 }

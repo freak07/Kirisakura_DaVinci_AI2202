@@ -2442,3 +2442,9 @@ config ARCH_HAS_SYSCALL_WRAPPER
 
 source "init/Kconfig.gki"
 source "init/Kconfig.gki-debug"
+
+config ASUSDEBUG
+	tristate "Enable asus debug"
+	default m
+	help
+	  add support for asus debug.

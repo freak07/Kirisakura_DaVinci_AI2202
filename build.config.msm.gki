@@ -66,7 +66,30 @@ append_cmd POST_DEFCONFIG_CMDS 'sanity_check_abi'
 
 function build_defconfig_fragments() {
 	if [[ "${VARIANT}" =~ ^(gki|consolidate)$ ]]; then
-		apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${MSM_ARCH}_GKI.config vendor/${MSM_ARCH}-gki_defconfig
+		if [ "${ASUS_BUILD_PROJECT}" = AI2202 ]; then
+			echo "[BUILD] AI2202"
+			if [ "${TARGET_BUILD_VARIANT}" = user ]; then
+				echo "[BUILD] user config ${ASUS_BUILD_PROJECT}_perf.config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${ASUS_BUILD_PROJECT}_perf.config  vendor/${MSM_ARCH}-gki_defconfig
+			else
+				echo "[BUILD] default ${MSM_ARCH}_GKI.config for debug"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${MSM_ARCH}_GKI.config  vendor/${MSM_ARCH}-gki_defconfig
+			fi
+		elif [ "${ASUS_BUILD_PROJECT}" = AI2201 ]; then
+			echo "[BUILD] AI2201 GKI"
+			if [ "${TARGET_BUILD_VARIANT}" = userdebug ]; then
+				echo "[BUILD] GKI userdebug config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${ASUS_BUILD_PROJECT}_GKI_debug.config vendor/${MSM_ARCH}-gki_defconfig
+			elif [ "${TARGET_BUILD_VARIANT}" = user ]; then
+				echo "[BUILD] GKI user config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${ASUS_BUILD_PROJECT}_GKI_perf.config vendor/${MSM_ARCH}-gki_defconfig
+			else
+				echo "[BUILD] GKI default config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${MSM_ARCH}_GKI.config vendor/${MSM_ARCH}-gki_defconfig
+			fi
+		else #it is the qcom default gki build
+			apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${MSM_ARCH}_GKI.config vendor/${MSM_ARCH}-gki_defconfig
+		fi
 		if [ "${VARIANT}" = gki ]; then
 			return
 		fi
@@ -75,7 +98,35 @@ function build_defconfig_fragments() {
 		# ABI comparison isn't applicable on consolidate variant
 		unset ABI_DEFINITION
 		apply_defconfig_fragment common/arch/${ARCH}/configs/consolidate.fragment consolidate_defconfig
-		apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${MSM_ARCH}_consolidate.config vendor/${MSM_ARCH}-consolidate_defconfig
+#ASUS_BSP +++ 
+		#apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${MSM_ARCH}_consolidate.config vendor/${MSM_ARCH}-consolidate_defconfig
+		if [ "${ASUS_BUILD_PROJECT}" = AI2201 ]; then
+			echo "[BUILD] AI2201"
+			if [ "${TARGET_BUILD_VARIANT}" = userdebug ]; then
+				echo "[BUILD] userdebug config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${ASUS_BUILD_PROJECT}_debug.config vendor/${MSM_ARCH}-consolidate_defconfig
+			elif [ "${TARGET_BUILD_VARIANT}" = user ]; then
+				echo "[BUILD] user config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${ASUS_BUILD_PROJECT}_perf.config vendor/${MSM_ARCH}-consolidate_defconfig
+			else
+				echo "[BUILD] default config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${MSM_ARCH}_consolidate.config vendor/${MSM_ARCH}-consolidate_defconfig
+			fi
+		fi
+		if [ "${ASUS_BUILD_PROJECT}" = AI2202 ]; then
+			echo "[BUILD] AI2202"
+			if [ "${TARGET_BUILD_VARIANT}" = userdebug ]; then
+				echo "[BUILD] userdebug config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${ASUS_BUILD_PROJECT}_debug.config vendor/${MSM_ARCH}-consolidate_defconfig
+			elif [ "${TARGET_BUILD_VARIANT}" = user ]; then
+				echo "[BUILD] user config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${ASUS_BUILD_PROJECT}_perf.config vendor/${MSM_ARCH}-consolidate_defconfig
+			else
+				echo "[BUILD] default config"
+				apply_defconfig_fragment ${KERNEL_DIR}/arch/${ARCH}/configs/vendor/${MSM_ARCH}_consolidate.config vendor/${MSM_ARCH}-consolidate_defconfig
+			fi
+		fi
+#ASUS_BSP ---
 	elif [ "${VARIANT}" = gki-ack ]; then
 		# In gki-only, then using ACK's GKI config directly
 		. ${KERNEL_DIR}/build.config.gki

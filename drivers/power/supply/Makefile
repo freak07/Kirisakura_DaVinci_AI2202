@@ -97,6 +97,12 @@ obj-$(CONFIG_CHARGER_UCS1002)	+= ucs1002_power.o
 obj-$(CONFIG_CHARGER_BD70528)	+= bd70528-charger.o
 obj-$(CONFIG_CHARGER_BD99954)	+= bd99954-charger.o
 obj-$(CONFIG_CHARGER_WILCO)	+= wilco-charger.o
+ifneq (,$(filter AI2202,$(ASUS_BUILD_PROJECT)))
+obj-$(CONFIG_QTI_BATTERY_CHARGER)	+= qti_battery_charger.o asus_battery_charger_AI2202.o qti_battery_charge_notify.o
+else ifneq (,$(filter AI2201,$(ASUS_BUILD_PROJECT)))
+obj-$(CONFIG_QTI_BATTERY_CHARGER)	+= qti_battery_charger_2.o asus_battery_charger.o qti_battery_charge_notify.o
+else
 obj-$(CONFIG_QTI_BATTERY_CHARGER)	+= qti_battery_charger.o
+endif
 obj-$(CONFIG_RN5T618_POWER)	+= rn5t618_power.o
 obj-$(CONFIG_QCOM_POWER_SUPPLY)		+= qcom/

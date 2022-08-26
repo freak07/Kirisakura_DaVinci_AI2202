@@ -1,0 +1,4 @@
+config SLA
+    tristate "SLA module"
+    depends on SLA_STAIC_COLLECT
+    default n

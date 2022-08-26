@@ -1036,6 +1036,46 @@ KBUILD_CFLAGS   += $(KCFLAGS)
 KBUILD_LDFLAGS_MODULE += --build-id=sha1
 LDFLAGS_vmlinux += --build-id=sha1
 
+# ASUS_BSP +++ Add ASUS build option to KBUILD_CPPFLAGS
+
+# add ASUS user/userdebug/ASUS_FTM/DXO build option
+ifneq ($(TARGET_BUILD_VARIANT),user)
+ifeq ($(ASUS_FTM),y)
+KBUILD_CPPFLAGS += -DASUS_FTM_BUILD=1
+else
+KBUILD_CPPFLAGS += -DASUS_USERDEBUG_BUILD=1
+endif
+else
+KBUILD_CPPFLAGS += -DASUS_USER_BUILD=1
+endif
+
+# Add ASUS build Project to KBUILD_CPPFLAGS
+ifneq (,$(filter AI2201,$(ASUS_BUILD_PROJECT)))
+KBUILD_CPPFLAGS += -DASUS_AI2201_PROJECT=1
+endif
+
+ifeq ($(ASUS_GKI_BUILD),y)
+$(warning "build with GKI")
+KBUILD_CPPFLAGS += -DASUS_GKI_BUILD=1
+else
+$(warning "build without GKI")
+endif
+
+ifneq (,$(filter AI2202,$(ASUS_BUILD_PROJECT)))
+KBUILD_CPPFLAGS += -DASUS_AI2202_PROJECT=1
+endif
+
+#ASUS_BUILD_NUMBER := $(BUILD_NUMBER_FROM_FILE)
+ASUS_BUILD_NUMBER := $(shell cat $(srctree)/../../out/soong/build_number.txt)
+$(warning ASUS_BUILD_NUMBER: $(ASUS_BUILD_NUMBER))
+ifneq ($(ASUS_BUILD_NUMBER),)
+       KBUILD_CPPFLAGS += -DASUS_SW_VER=\"$(ASUS_BUILD_NUMBER)\"
+else
+       KBUILD_CPPFLAGS += -DASUS_SW_VER=\"$(ASUS_BUILD_PROJECT)_ENG\"
+endif
+
+# ASUS_BSP --- Add ASUS build option to KBUILD_CPPFLAGS
+
 ifeq ($(CONFIG_STRIP_ASM_SYMS),y)
 LDFLAGS_vmlinux	+= $(call ld-option, -X,)
 endif
@@ -1418,7 +1458,8 @@ endif
 
 uts_len := 64
 ifneq (,$(BUILD_NUMBER))
-	UTS_RELEASE=$(KERNELRELEASE)-ab$(BUILD_NUMBER)
+	#UTS_RELEASE=$(KERNELRELEASE)-ab$(BUILD_NUMBER)
+	UTS_RELEASE=$(KERNELRELEASE)
 else
 	UTS_RELEASE=$(KERNELRELEASE)
 endif

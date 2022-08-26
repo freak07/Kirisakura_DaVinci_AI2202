@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0
+config EXPANDMEM
+	tristate "Enable expand memory"
+	depends on MEMCG && ZRAM
+	help
+	  With this feature, you can use the expanded memory
+	  as the backend device in ZRAM.
+
+config EXPANDMEM_DEBUG
+	tristate "Enable expandmem debug"
+	depends on EXPANDMEM
+	help
+	  This macro controls the debugging functions of expand memory.

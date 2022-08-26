@@ -485,7 +485,7 @@ static int msm_hsphy_init(struct usb_phy *uphy)
 			PARAM_OVRD_MASK, phy->param_ovrd3);
 	}
 
-	dev_dbg(uphy->dev, "x0:%08x x1:%08x x2:%08x x3:%08x\n",
+	dev_info(uphy->dev, "x0:%08x x1:%08x x2:%08x x3:%08x\n",
 	readl_relaxed(phy->base + USB2PHY_USB_PHY_PARAMETER_OVERRIDE_X0),
 	readl_relaxed(phy->base + USB2PHY_USB_PHY_PARAMETER_OVERRIDE_X1),
 	readl_relaxed(phy->base + USB2PHY_USB_PHY_PARAMETER_OVERRIDE_X2),
@@ -631,6 +631,9 @@ static void msm_hsphy_vbus_draw_work(struct work_struct *w)
 static int msm_hsphy_set_power(struct usb_phy *uphy, unsigned int mA)
 {
 	struct msm_hsphy *phy = container_of(uphy, struct msm_hsphy, phy);
+
+	if (phy->vbus_draw == mA)
+		return 0;
 
 	if (phy->cable_connected && (mA == 0))
 		return 0;

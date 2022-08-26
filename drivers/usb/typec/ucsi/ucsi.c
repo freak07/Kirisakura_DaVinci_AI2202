@@ -806,9 +806,10 @@ static void ucsi_handle_connector_change(struct work_struct *work)
 
 		if (con->status.flags & UCSI_CONSTAT_CONNECTED)
 			ucsi_register_partner(con);
-		else
+		else {
 			ucsi_unregister_partner(con);
-
+			typec_set_data_role(con->port, TYPEC_DEVICE);
+		}
 		ucsi_port_psy_changed(con);
 
 		/* Only notify USB controller if partner supports USB data */
@@ -941,7 +942,7 @@ static int ucsi_dr_swap(struct typec_port *port, enum typec_data_role role)
 	u64 command;
 	int ret = 0;
 
-	mutex_lock(&con->lock);
+	mutex_lock(&con->swap_lock);
 
 	if (!con->partner) {
 		ret = -ENOTCONN;
@@ -967,7 +968,7 @@ static int ucsi_dr_swap(struct typec_port *port, enum typec_data_role role)
 		ret = -ETIMEDOUT;
 
 out_unlock:
-	mutex_unlock(&con->lock);
+	mutex_unlock(&con->swap_lock);
 
 	return ret < 0 ? ret : 0;
 }
@@ -979,7 +980,7 @@ static int ucsi_pr_swap(struct typec_port *port, enum typec_role role)
 	u64 command;
 	int ret = 0;
 
-	mutex_lock(&con->lock);
+	mutex_lock(&con->swap_lock);
 
 	if (!con->partner) {
 		ret = -ENOTCONN;
@@ -1012,7 +1013,7 @@ static int ucsi_pr_swap(struct typec_port *port, enum typec_role role)
 	}
 
 out_unlock:
-	mutex_unlock(&con->lock);
+	mutex_unlock(&con->swap_lock);
 
 	return ret;
 }
@@ -1046,6 +1047,7 @@ static int ucsi_register_port(struct ucsi *ucsi, int index)
 	INIT_WORK(&con->work, ucsi_handle_connector_change);
 	init_completion(&con->complete);
 	mutex_init(&con->lock);
+	mutex_init(&con->swap_lock);
 	con->num = index + 1;
 	con->ucsi = ucsi;
 

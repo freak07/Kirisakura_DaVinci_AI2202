@@ -33,6 +33,10 @@
 #include "ufshcd-crypto-qti.h"
 #include <trace/hooks/ufshcd.h>
 
+#ifdef CONFIG_SCSI_UFS_ASUS
+#include "ufs-qcom_asus.h"
+#endif
+
 #define UFS_QCOM_DEFAULT_DBG_PRINT_EN	\
 	(UFS_QCOM_DBG_PRINT_REGS_EN | UFS_QCOM_DBG_PRINT_TEST_BUS_EN)
 
@@ -1470,6 +1474,7 @@ static int ufs_qcom_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 		ufs_qcom_enable_vreg(hba->dev, host->vccq_parent);
 
 	err = ufs_qcom_enable_lane_clks(host);
+	
 	if (err)
 		return err;
 
@@ -3348,6 +3353,10 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 	if (!host->ufs_ipc_log_ctx)
 		dev_warn(dev, "IPC Log init - failed\n");
 
+#ifdef CONFIG_SCSI_UFS_ASUS
+	ufshcd_add_sysfs_nodes(host);
+#endif
+
 	goto out;
 
 out_disable_vccq_parent:
@@ -3367,6 +3376,10 @@ out:
 static void ufs_qcom_exit(struct ufs_hba *hba)
 {
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
+
+#ifdef CONFIG_SCSI_UFS_ASUS
+	ufshcd_remove_sysfs_nodes(host);
+#endif
 
 	ufs_qcom_disable_lane_clks(host);
 	ufs_qcom_phy_power_off(hba);
@@ -4943,7 +4956,11 @@ MODULE_DEVICE_TABLE(acpi, ufs_qcom_acpi_match);
 
 static const struct dev_pm_ops ufs_qcom_pm_ops = {
 	.suspend	= ufshcd_pltfrm_suspend,
+#ifdef CONFIG_SCSI_UFS_ASUS	
+	.resume		= asus_ufshcd_pltfrm_resume,
+#else
 	.resume		= ufshcd_pltfrm_resume,
+#endif
 	.runtime_suspend = ufshcd_pltfrm_runtime_suspend,
 	.runtime_resume  = ufshcd_pltfrm_runtime_resume,
 	.runtime_idle    = ufshcd_pltfrm_runtime_idle,

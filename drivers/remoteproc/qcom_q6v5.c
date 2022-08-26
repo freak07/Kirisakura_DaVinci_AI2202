@@ -16,6 +16,10 @@
 #include <linux/delay.h>
 #include "qcom_common.h"
 #include "qcom_q6v5.h"
+#include <linux/slab.h>
+
+#include "linux/asusdebug.h"/*AS-K ASUS SSR and Debug - Save SSR inform to asusdebug+*/
+
 
 #define Q6V5_PANIC_DELAY_MS	200
 
@@ -25,6 +29,16 @@
  *
  * Return: 0 on success, negative errno on failure
  */
+
+
+/*AS-K ASUS SSR and Debug+++*/
+#define MAX_SSR_REASON_LEN (128)
+static char *ssr_reason = NULL;
+module_param(ssr_reason, charp, 0444);
+#define SUBSYS_NAME_TAG "SUBSYS_NAME"/*Send SubSys UEvent+*/
+#define SUBSYS_REASON_TAG "SUBSYS_REASON"/*Send SubSys UEvent+*/
+/*AS-K ASUS SSR and Debug---*/
+
 int qcom_q6v5_prepare(struct qcom_q6v5 *q6v5)
 {
 	reinit_completion(&q6v5->start_done);
@@ -98,6 +112,12 @@ static irqreturn_t q6v5_wdog_interrupt(int irq, void *data)
 	size_t len;
 	char *msg;
 
+	/*AS-K ASUS SSR and Debug+++*/
+	char mName_Buf[64];
+	char mReason_Buf[512];
+	char *envp[] = {mName_Buf, mReason_Buf, NULL };
+	/*AS-K ASUS SSR and Debug---*/
+
 	/* Sometimes the stop triggers a watchdog rather than a stop-ack */
 	if (!q6v5->running) {
 		dev_info(q6v5->dev, "received wdog irq while q6 is offline\n");
@@ -110,6 +130,18 @@ static irqreturn_t q6v5_wdog_interrupt(int irq, void *data)
 		dev_err(q6v5->dev, "watchdog received: %s\n", msg);
 	else
 		dev_err(q6v5->dev, "watchdog without message\n");
+
+	/*AS-K ASUS SSR and Debug - Save SSR reason+*/
+
+	strlcpy(ssr_reason, msg, MAX_SSR_REASON_LEN);
+	
+	snprintf(mName_Buf, sizeof(mName_Buf), "%s=%s", SUBSYS_NAME_TAG, q6v5->rproc->name);
+	snprintf(mReason_Buf, sizeof(mReason_Buf), "%s=[SSR]:%s %s", SUBSYS_REASON_TAG, q6v5->rproc->name, ssr_reason);
+	kobject_uevent_env(&(q6v5->dev->kobj), KOBJ_CHANGE, envp);
+  
+	subsys_save_reason(q6v5->rproc->name, msg);
+
+	/*AS-K ASUS SSR and Debug - Save SSR reason+*/
 
 	q6v5->running = false;
 	if (q6v5->rproc->recovery_disabled) {
@@ -130,6 +162,13 @@ static irqreturn_t q6v5_fatal_interrupt(int irq, void *data)
 	size_t len;
 	char *msg;
 
+	/*AS-K ASUS SSR and Debug+++*/
+	char mName_Buf[64];
+	char mReason_Buf[512];
+	char *envp[] = {mName_Buf, mReason_Buf, NULL };
+	/*AS-K ASUS SSR and Debug---*/
+
+
 	if (!q6v5->running) {
 		dev_info(q6v5->dev, "received fatal irq while q6 is offline\n");
 		return IRQ_HANDLED;
@@ -140,6 +179,17 @@ static irqreturn_t q6v5_fatal_interrupt(int irq, void *data)
 		dev_err(q6v5->dev, "fatal error received: %s\n", msg);
 	else
 		dev_err(q6v5->dev, "fatal error without message\n");
+
+	/*AS-K ASUS SSR and Debug - Save SSR reason+*/
+
+	strlcpy(ssr_reason, msg, MAX_SSR_REASON_LEN);
+	
+	snprintf(mName_Buf, sizeof(mName_Buf), "%s=%s", SUBSYS_NAME_TAG, q6v5->rproc->name);
+	snprintf(mReason_Buf, sizeof(mReason_Buf), "%s=[SSR]:%s %s", SUBSYS_REASON_TAG, q6v5->rproc->name, ssr_reason);
+	kobject_uevent_env(&(q6v5->dev->kobj), KOBJ_CHANGE, envp);
+
+	subsys_save_reason(q6v5->rproc->name, msg);
+	/*AS-K ASUS SSR and Debug - Save SSR reason+*/
 
 	q6v5->running = false;
 	if (q6v5->rproc->recovery_disabled) {
@@ -277,6 +327,10 @@ int qcom_q6v5_init(struct qcom_q6v5 *q6v5, struct platform_device *pdev,
 
 	init_completion(&q6v5->start_done);
 	init_completion(&q6v5->stop_done);
+
+	/*AS-K ASUS SSR and Debug+++*/
+	ssr_reason = kzalloc(sizeof(char) * MAX_SSR_REASON_LEN, GFP_KERNEL);
+	/*AS-K ASUS SSR and Debug---*/
 
 	q6v5->wdog_irq = platform_get_irq_byname(pdev, "wdog");
 	if (q6v5->wdog_irq < 0)

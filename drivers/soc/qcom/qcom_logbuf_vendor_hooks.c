@@ -14,6 +14,12 @@
 #include <linux/atomic.h>
 #include <linux/slab.h>
 #include <soc/qcom/minidump.h>
+#include <linux/proc_fs.h>
+#include <linux/time.h>
+#include <linux/ktime.h>
+
+#include <linux/rtc.h>
+#include <linux/timekeeping.h>
 
 #include <trace/hooks/logbuf.h>
 #include "../../../kernel/printk/printk_ringbuffer.h"
@@ -33,6 +39,169 @@ static size_t print_time(u64 ts, char *buf, size_t buf_sz)
 	return scnprintf(buf, buf_sz, "[%5lu.%06lu]",
 				(unsigned long)ts, rem_nsec / 1000);
 }
+
+struct timezone sys_tz;
+extern int nSuspendInProgress;
+//static struct workqueue_struct *ASUSEvtlog_workQueue;
+//static int g_hfileEvtlog = -MAX_ERRNO;
+static int g_bEventlogEnable = 0;
+#define ASUS_EVTLOG_STR_MAXLEN (256)
+#define ASUS_EVTLOG_MAX_ITEM (32)
+static struct mutex mA;
+
+static char *g_Asus_Eventlog;
+static int  g_Asus_Eventlog_size;
+
+static int g_Asus_Eventlog_read = 0;
+static int g_Asus_Eventlog_write = 0;
+
+char evtlog_bootup_reason[100];
+EXPORT_SYMBOL(evtlog_bootup_reason);
+char evtlog_poweroff_reason[100];
+EXPORT_SYMBOL(evtlog_poweroff_reason);
+
+void ASUSEvtlog(const char *fmt, ...)
+{
+        va_list args;
+        char *buffer;
+
+        if (!in_interrupt() && !in_atomic() && !irqs_disabled()){
+                mutex_lock(&mA);
+		}
+		
+        buffer = &g_Asus_Eventlog[(g_Asus_Eventlog_write*ASUS_EVTLOG_STR_MAXLEN)];
+        g_Asus_Eventlog_write++;
+        g_Asus_Eventlog_write %= ASUS_EVTLOG_MAX_ITEM;
+
+		if (g_bEventlogEnable == 0){
+			snprintf(buffer, ASUS_EVTLOG_STR_MAXLEN,
+					"\n\n---------------System Boot----%s---------\n"
+					"[Shutdown] Reset Trigger: %s ###### \n"
+					"###### Reset Type: %s ######\n",
+					ASUS_SW_VER,
+					evtlog_poweroff_reason,
+					evtlog_bootup_reason
+			);
+			g_bEventlogEnable = 1;
+			buffer = &g_Asus_Eventlog[(g_Asus_Eventlog_write*ASUS_EVTLOG_STR_MAXLEN)];
+        	g_Asus_Eventlog_write++;
+        	g_Asus_Eventlog_write %= ASUS_EVTLOG_MAX_ITEM;
+		}
+
+        if (!in_interrupt() && !in_atomic() && !irqs_disabled()){
+                mutex_unlock(&mA);
+        }
+
+        memset(buffer, 0, ASUS_EVTLOG_STR_MAXLEN);
+
+        if (buffer) {
+			struct rtc_time tm;
+			struct timespec64 ts;
+			ktime_get_real_ts64(&ts);
+			ts.tv_sec -= sys_tz.tz_minuteswest * 60;
+			rtc_time64_to_tm(ts.tv_sec, &tm);
+			ktime_get_raw_ts64(&ts);
+			sprintf(buffer, "(%ld)%04d-%02d-%02d %02d:%02d:%02d :", ts.tv_sec, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+			va_start(args, fmt);
+			vscnprintf(buffer + strlen(buffer), ASUS_EVTLOG_STR_MAXLEN - strlen(buffer), fmt, args);
+			va_end(args);
+			printk("%s", buffer);
+        } else {
+                printk("ASUSEvtlog buffer cannot be allocated\n");
+        }
+}
+EXPORT_SYMBOL(ASUSEvtlog);
+static DECLARE_WAIT_QUEUE_HEAD(log_wait);
+
+
+static ssize_t asusevtlog_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+{
+		char messages[256];
+        if (count > 256)
+                count = 256;
+
+        memset(messages, 0, sizeof(messages));
+        if (copy_from_user(messages, buf, count))
+                return -EFAULT;
+
+        ASUSEvtlog("%s", messages);
+		wake_up_interruptible(&log_wait);
+        return count;
+}
+
+
+static ssize_t asusevtlog_read(struct file *file, char __user *buf,
+                              size_t count, loff_t *ppos)
+{
+	int str_len = 0;
+	char *pchar;
+	int error = 0;
+	error = wait_event_interruptible(log_wait,
+						 g_Asus_Eventlog_read != g_Asus_Eventlog_write);
+
+	if(!(g_Asus_Eventlog_read != g_Asus_Eventlog_write)) return 0;
+	mutex_lock(&mA);
+	str_len = strlen(&g_Asus_Eventlog[(g_Asus_Eventlog_read*ASUS_EVTLOG_STR_MAXLEN)]);
+	pchar = &g_Asus_Eventlog[(g_Asus_Eventlog_read*ASUS_EVTLOG_STR_MAXLEN)];
+	g_Asus_Eventlog_read++;
+	g_Asus_Eventlog_read %= ASUS_EVTLOG_MAX_ITEM;
+	mutex_unlock(&mA);
+
+	if (pchar[str_len - 1] != '\n') {
+		if (str_len + 1 >= ASUS_EVTLOG_STR_MAXLEN){
+				str_len = ASUS_EVTLOG_STR_MAXLEN - 2;
+		}
+		pchar[str_len] = '\n';
+		pchar[str_len + 1] = '\0';
+	}
+	if (copy_to_user(buf, pchar, str_len)) {
+		if (!str_len)
+			str_len = -EFAULT;
+	}
+
+        return str_len;
+}
+
+
+static const struct proc_ops proc_asusevtlog_operations = {
+        .proc_write  = asusevtlog_write,
+		.proc_read   = asusevtlog_read,
+};
+
+
+
+void asusevtlog_init(void){
+	void *start; 
+	int ret = 0;
+	struct md_region md_entry;
+	
+	start = kzalloc((ASUS_EVTLOG_MAX_ITEM * ASUS_EVTLOG_STR_MAXLEN), GFP_KERNEL);
+	if (!start) {
+		ret = -ENOMEM;
+		return ;
+	}
+
+	strlcpy(md_entry.name, "KEVENT_LOG", sizeof(md_entry.name));
+	md_entry.virt_addr = (uintptr_t)start;
+	md_entry.phys_addr = virt_to_phys(start);
+	md_entry.size = (ASUS_EVTLOG_MAX_ITEM * ASUS_EVTLOG_STR_MAXLEN);
+	ret = msm_minidump_add_region(&md_entry);
+	if (ret < 0) {
+		pr_err("Failed to add KEVENT_LOG entry in minidump table\n");
+		kfree(start);
+		return ;
+	}
+
+	mutex_init(&mA);
+
+	g_Asus_Eventlog_size = (ASUS_EVTLOG_MAX_ITEM * ASUS_EVTLOG_STR_MAXLEN);
+	g_Asus_Eventlog = (char *)start;
+
+
+	proc_create("asusevtlog", S_IRWXUGO, NULL, &proc_asusevtlog_operations);  
+
+}
+
 
 #ifdef CONFIG_PRINTK_CALLER
 #define PREFIX_MAX              48
@@ -334,14 +503,15 @@ static void release_boot_log_buf(void)
 
 	kfree(boot_log_buf);
 }
-
 static int logbuf_vendor_hooks_driver_probe(struct platform_device *pdev)
 {
 	int ret;
 
 	ret = boot_log_init();
+
 	if (ret < 0)
 		return ret;
+	
 
 	ret = register_trace_android_vh_logbuf(copy_boot_log, NULL);
 	if (ret) {
@@ -350,12 +520,18 @@ static int logbuf_vendor_hooks_driver_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+
 	ret = register_trace_android_vh_logbuf_pr_cont(copy_boot_log_pr_cont, NULL);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to register android_vh_logbuf_pr_cont hook\n");
 		unregister_trace_android_vh_logbuf(copy_boot_log, NULL);
 		kfree(boot_log_buf);
 	}
+
+	asusevtlog_init();
+
+	
+
 
 	return ret;
 }
@@ -392,6 +568,7 @@ module_init(qcom_logbuf_vendor_hook_driver_init);
 #else
 pure_initcall(qcom_logbuf_vendor_hook_driver_init);
 #endif
+
 
 static void __exit qcom_logbuf_vendor_hook_driver_exit(void)
 {

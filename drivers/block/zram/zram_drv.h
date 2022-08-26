@@ -50,7 +50,11 @@ enum zram_pageflags {
 	ZRAM_UNDER_WB,	/* page is under writeback */
 	ZRAM_HUGE,	/* Incompressible page */
 	ZRAM_IDLE,	/* not accessed page since last idle marking */
-
+#if IS_ENABLED(CONFIG_EXPANDMEM)
+	ZRAM_UNDER_FAULTOUT,
+	ZRAM_FROM_ESWAP,
+	ZRAM_MCGID_CLEAR,
+#endif
 	__NR_ZRAM_PAGEFLAGS,
 };
 
@@ -125,5 +129,59 @@ struct zram {
 #ifdef CONFIG_ZRAM_MEMORY_TRACKING
 	struct dentry *debugfs_dir;
 #endif
+	ANDROID_OEM_DATA(1);
 };
+
+static inline void zram_slot_lock(struct zram *zram, u32 index)
+{
+	bit_spin_lock(ZRAM_LOCK, &zram->table[index].flags);
+}
+
+static inline void zram_slot_unlock(struct zram *zram, u32 index)
+{
+	bit_spin_unlock(ZRAM_LOCK, &zram->table[index].flags);
+}
+
+static inline unsigned long zram_get_handle(struct zram *zram, u32 index)
+{
+	return zram->table[index].handle;
+}
+
+static inline void zram_set_handle(struct zram *zram, u32 index, unsigned long handle)
+{
+	zram->table[index].handle = handle;
+}
+
+/* flag operations require table entry bit_spin_lock() being held */
+static inline bool zram_test_flag(struct zram *zram, u32 index,
+			enum zram_pageflags flag)
+{
+	return zram->table[index].flags & BIT(flag);
+}
+
+static inline void zram_set_flag(struct zram *zram, u32 index,
+			enum zram_pageflags flag)
+{
+	zram->table[index].flags |= BIT(flag);
+}
+
+static inline void zram_clear_flag(struct zram *zram, u32 index,
+			enum zram_pageflags flag)
+{
+	zram->table[index].flags &= ~BIT(flag);
+}
+
+static inline size_t zram_get_obj_size(struct zram *zram, u32 index)
+{
+	return zram->table[index].flags & (BIT(ZRAM_FLAG_SHIFT) - 1);
+}
+
+static inline void zram_set_obj_size(struct zram *zram,
+					u32 index, size_t size)
+{
+	unsigned long flags = zram->table[index].flags >> ZRAM_FLAG_SHIFT;
+
+	zram->table[index].flags = (flags << ZRAM_FLAG_SHIFT) | size;
+}
+
 #endif

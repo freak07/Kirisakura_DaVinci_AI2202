@@ -454,10 +454,10 @@ static int pmic_pon_log_parse_entry(const struct pmic_pon_log_entry *entry,
 		break;
 	}
 
-	if (is_important)
+	//if (is_important)
 		pr_info("PMIC PON log: %s\n", buf);
-	else
-		pr_debug("PMIC PON log: %s\n", buf);
+	//else
+	//	pr_debug("PMIC PON log: %s\n", buf);
 
 	if (entry->state < ARRAY_SIZE(pmic_pon_state_label))
 		ipc_log_string(ipc_log, "State=%s; %s\n",
@@ -468,6 +468,144 @@ static int pmic_pon_log_parse_entry(const struct pmic_pon_log_entry *entry,
 
 	return 0;
 }
+
+/* ASUS BSP DEBUG +++ */
+struct asus_pon_log
+{
+	int start_index;
+	int end_index;
+};
+
+static struct pmic_pon_log_entry pm_pon_logs[FIFO_MAX_ENTRY_COUNT] = {0};
+int pm_pon_logs_count;
+int getNextSuccessIndex(struct nvmem_device *nvmem,int addr_start)
+{ 
+	//num pmic_pon_event err_flag = PMIC_PON_EVENT_PON_SUCCESS;
+	int next_index = -1;
+
+	addr_start++;
+	while(addr_start < FIFO_MAX_ENTRY_COUNT)
+	{
+		if(PMIC_PON_EVENT_PON_SUCCESS == pm_pon_logs[addr_start].event)
+		{
+			next_index = addr_start;
+			break;
+		}
+		addr_start++;
+	}
+	return next_index;
+}
+
+extern char evtlog_bootup_reason[100];
+extern char evtlog_poweroff_reason[100];
+char pmic_log_bf[64];
+
+const char *getEventValue(int event_type,struct asus_pon_log pon_log)
+{
+	int start_index = pon_log.start_index;
+	int i;
+	const char *label = NULL;
+
+	while(start_index < pon_log.end_index)
+	{
+		if(event_type == pm_pon_logs[start_index].event)
+		 {
+			switch (pm_pon_logs[start_index].event)
+			{
+				case PMIC_PON_EVENT_RESET_TYPE:
+					if (pm_pon_logs[start_index].data0 < ARRAY_SIZE(pmic_pon_reset_type_label) &&
+		  	 			 pmic_pon_reset_type_label[pm_pon_logs[start_index].data0])
+		  	 			 return pmic_pon_reset_type_label[pm_pon_logs[start_index].data0];
+					else
+						return "Unknown";
+				case PMIC_PON_EVENT_FAULT_REASON_1_2:{
+						int buf_pos = 0;
+						strncpy(pmic_log_bf,"\0",64);
+						for (i = 0; i < 8; i++) {
+							if (pm_pon_logs[start_index].data0 & BIT(i)) {
+								if(buf_pos  + strlen(pmic_pon_fault_reason1[i]) < sizeof(pmic_log_bf))
+									buf_pos+=snprintf(pmic_log_bf+buf_pos, sizeof(pmic_log_bf), "[%s]",pmic_pon_fault_reason1[i]);
+							}
+						}
+						for (i = 0; i < 8; i++) {
+							if (pm_pon_logs[start_index].data1 & BIT(i)) {
+								if(buf_pos  + strlen(pmic_pon_fault_reason1[i]) < sizeof(pmic_log_bf))
+									buf_pos+=snprintf(pmic_log_bf+buf_pos, sizeof(pmic_log_bf), "[%s]",pmic_pon_fault_reason2[i]);
+							}
+						}
+						return pmic_log_bf;
+					}
+				case PMIC_PON_EVENT_FAULT_REASON_3:	
+					break;
+				case PMIC_PON_EVENT_RESET_TRIGGER_RECEIVED:{
+						u16 data;
+						data = (pm_pon_logs[start_index].data1 << 8) | pm_pon_logs[start_index].data0;
+						for (i = 0; i < ARRAY_SIZE(pmic_pon_reset_trigger_map); i++) {
+							if (pmic_pon_reset_trigger_map[i].code == data) {
+								label = pmic_pon_reset_trigger_map[i].label;
+								break;
+							}
+						}
+						if (label) {
+							return label;
+						} else {
+							strncpy(pmic_log_bf,"\0",64);
+							 scnprintf(pmic_log_bf , 64,
+									 "SID=0x%X, PID=0x%02X, IRQ=0x%X",
+									 pm_pon_logs[start_index].data1 >> 4, (data >> 4) & 0xFF,
+									 pm_pon_logs[start_index].data0 & 0x7);
+							 return pmic_log_bf;
+						}
+					}
+				default:
+					return NULL;
+			}
+		}
+	 start_index++;
+	}
+
+	return NULL;
+}
+
+void writePowerOnOff2Evtlog(struct nvmem_device *nvmem,int addr_start)
+{
+	struct asus_pon_log pon_log[2];
+
+	const char* temp1 = NULL; //Reset Type
+	const char* poweroff_reason= NULL; //Reset Trigger
+	const char* fault_reason = NULL; //FAULT_REASON
+	int buf_pos = 0;
+
+	pon_log[0].start_index = addr_start;
+	pon_log[0].end_index   = getNextSuccessIndex(nvmem,addr_start);
+
+	temp1 = getEventValue(PMIC_PON_EVENT_RESET_TYPE,pon_log[0]);
+	fault_reason = getEventValue(PMIC_PON_EVENT_FAULT_REASON_1_2,pon_log[0]);
+	poweroff_reason = getEventValue(PMIC_PON_EVENT_RESET_TRIGGER_RECEIVED,pon_log[0]);
+
+	buf_pos = snprintf(evtlog_poweroff_reason, sizeof(evtlog_poweroff_reason), "0x%x => [%s]; ",(pm_pon_logs[pon_log[0].start_index+1].data1 << 8 | pm_pon_logs[pon_log[0].start_index+1].data0),poweroff_reason);
+	if(fault_reason != NULL)
+		snprintf(evtlog_poweroff_reason+buf_pos, sizeof(evtlog_poweroff_reason), " %s",fault_reason);
+
+	if(temp1 != NULL)
+		snprintf(evtlog_bootup_reason, sizeof(evtlog_bootup_reason), "[%s] ",temp1 );
+	else
+		snprintf(evtlog_bootup_reason, sizeof(evtlog_bootup_reason), "[Unknown]; ");
+
+}
+
+void reverse_pm_pon_logs(void)
+{
+	struct pmic_pon_log_entry temp;
+	int i;
+	for( i = 0;i <=pm_pon_logs_count/2; i++)
+	{
+		temp = pm_pon_logs[i];
+		pm_pon_logs[i] = pm_pon_logs[pm_pon_logs_count - i];
+		pm_pon_logs[pm_pon_logs_count - i] = temp;
+	}
+}
+/* ASUS BSP DEBUG --- */
 
 static int pmic_pon_log_parse(struct pmic_pon_log_dev *pon_dev)
 {
@@ -511,8 +649,21 @@ static int pmic_pon_log_parse(struct pmic_pon_log_dev *pon_dev)
 		if (ret < 0)
 			return ret;
 
+		/* ASUS BSP DEBUG +++ */
+		pm_pon_logs[i].state = entry.state;
+		pm_pon_logs[i].event = entry.event;
+		pm_pon_logs[i].data1 = entry.data1;
+		pm_pon_logs[i].data0 = entry.data0;
+		pm_pon_logs_count = i;
+		/* ASUS BSP DEBUG --- */
+
 		pon_dev->log[pon_dev->log_len++] = entry;
 	}
+
+	/* ASUS BSP DEBUG +++ */
+	reverse_pm_pon_logs();
+	writePowerOnOff2Evtlog(pon_dev->nvmem,0);
+	/* ASUS BSP DEBUG --- */
 
 	return 0;
 }

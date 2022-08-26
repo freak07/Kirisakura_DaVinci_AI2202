@@ -35,7 +35,7 @@ static const unsigned char hid_keyboard[256] = {
 	191,192,193,194,134,138,130,132,128,129,131,137,133,135,136,113,
 	115,114,unk,unk,unk,121,unk, 89, 93,124, 92, 94, 95,unk,unk,unk,
 	122,123, 90, 91, 85,unk,unk,unk,unk,unk,unk,unk,111,unk,unk,unk,
-	unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,
+	unk,unk,unk,unk,unk,KEY_D,KEY_E,KEY_F,KEY_G,unk,unk,unk,unk,unk,unk,unk,
 	unk,unk,unk,unk,unk,unk,179,180,unk,unk,unk,unk,unk,unk,unk,unk,
 	unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,unk,
 	unk,unk,unk,unk,unk,unk,unk,unk,111,unk,unk,unk,unk,unk,unk,unk,
@@ -963,6 +963,10 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x0e5: map_key_clear(KEY_BASSBOOST);	break;
 		case 0x0e9: map_key_clear(KEY_VOLUMEUP);	break;
 		case 0x0ea: map_key_clear(KEY_VOLUMEDOWN);	break;
+		case 0x0eb: map_key_clear(KEY_D);	break;
+		case 0x0ec: map_key_clear(KEY_E);	break;
+		case 0x0ed: map_key_clear(KEY_F);	break;
+		case 0x0ee: map_key_clear(KEY_G);	break;
 		case 0x0f5: map_key_clear(KEY_SLOW);		break;
 
 		case 0x181: map_key_clear(KEY_BUTTONCONFIG);	break;

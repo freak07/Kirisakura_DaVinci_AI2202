@@ -82,7 +82,14 @@ void qcom_remove_sysmon_subdev(struct qcom_sysmon *sysmon);
 bool qcom_sysmon_shutdown_acked(struct qcom_sysmon *sysmon);
 uint32_t qcom_sysmon_get_txn_id(struct qcom_sysmon *sysmon);
 int qcom_sysmon_get_reason(struct qcom_sysmon *sysmon, char *buf, size_t len);
+
+extern void subsys_save_reason(const char *name, char *reason);/*AS-K ASUS SSR and Debug+*/
+
 #else
+static inline void subsys_save_reason(const char *name, char *reason)/*AS-K ASUS SSR and Debug+*/
+{
+	return;
+}
 static inline struct qcom_sysmon *qcom_add_sysmon_subdev(struct rproc *rproc,
 							 const char *name,
 							 int ssctl_instance)

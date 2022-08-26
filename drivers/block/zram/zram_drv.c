@@ -55,6 +55,19 @@ static size_t huge_class_size;
 static const struct block_device_operations zram_devops;
 static const struct block_device_operations zram_wb_devops;
 
+#if IS_ENABLED(CONFIG_EXPANDMEM)
+void (*vh_zram_free_page)(struct zram *zram, size_t index) = NULL;
+EXPORT_SYMBOL_GPL(vh_zram_free_page);
+void (*vh__zram_bvec_read)(struct bio *bio, struct zram *zram, size_t index, int *ret) = NULL;
+EXPORT_SYMBOL_GPL(vh__zram_bvec_read);
+void (*vh__zram_bvec_write)(struct zram *zram, size_t index, struct mem_cgroup *memcg) = NULL;
+EXPORT_SYMBOL_GPL(vh__zram_bvec_write);
+void (*vh_zram_slot_free_notify)(struct zram *zram, size_t index, int *ret) = NULL;
+EXPORT_SYMBOL_GPL(vh_zram_slot_free_notify);
+void (*vh_disksize_store)(struct zram *zram) = NULL;
+EXPORT_SYMBOL_GPL(vh_disksize_store);
+#endif
+
 static void zram_free_page(struct zram *zram, size_t index);
 static int zram_bvec_read(struct zram *zram, struct bio_vec *bvec,
 				u32 index, int offset, struct bio *bio);
@@ -63,16 +76,6 @@ static int zram_bvec_read(struct zram *zram, struct bio_vec *bvec,
 static int zram_slot_trylock(struct zram *zram, u32 index)
 {
 	return bit_spin_trylock(ZRAM_LOCK, &zram->table[index].flags);
-}
-
-static void zram_slot_lock(struct zram *zram, u32 index)
-{
-	bit_spin_lock(ZRAM_LOCK, &zram->table[index].flags);
-}
-
-static void zram_slot_unlock(struct zram *zram, u32 index)
-{
-	bit_spin_unlock(ZRAM_LOCK, &zram->table[index].flags);
 }
 
 static inline bool init_done(struct zram *zram)
@@ -85,35 +88,6 @@ static inline struct zram *dev_to_zram(struct device *dev)
 	return (struct zram *)dev_to_disk(dev)->private_data;
 }
 
-static unsigned long zram_get_handle(struct zram *zram, u32 index)
-{
-	return zram->table[index].handle;
-}
-
-static void zram_set_handle(struct zram *zram, u32 index, unsigned long handle)
-{
-	zram->table[index].handle = handle;
-}
-
-/* flag operations require table entry bit_spin_lock() being held */
-static bool zram_test_flag(struct zram *zram, u32 index,
-			enum zram_pageflags flag)
-{
-	return zram->table[index].flags & BIT(flag);
-}
-
-static void zram_set_flag(struct zram *zram, u32 index,
-			enum zram_pageflags flag)
-{
-	zram->table[index].flags |= BIT(flag);
-}
-
-static void zram_clear_flag(struct zram *zram, u32 index,
-			enum zram_pageflags flag)
-{
-	zram->table[index].flags &= ~BIT(flag);
-}
-
 static inline void zram_set_element(struct zram *zram, u32 index,
 			unsigned long element)
 {
@@ -123,19 +97,6 @@ static inline void zram_set_element(struct zram *zram, u32 index,
 static unsigned long zram_get_element(struct zram *zram, u32 index)
 {
 	return zram->table[index].element;
-}
-
-static size_t zram_get_obj_size(struct zram *zram, u32 index)
-{
-	return zram->table[index].flags & (BIT(ZRAM_FLAG_SHIFT) - 1);
-}
-
-static void zram_set_obj_size(struct zram *zram,
-					u32 index, size_t size)
-{
-	unsigned long flags = zram->table[index].flags >> ZRAM_FLAG_SHIFT;
-
-	zram->table[index].flags = (flags << ZRAM_FLAG_SHIFT) | size;
 }
 
 static inline bool zram_allocated(struct zram *zram, u32 index)
@@ -1193,6 +1154,12 @@ static void zram_free_page(struct zram *zram, size_t index)
 #ifdef CONFIG_ZRAM_MEMORY_TRACKING
 	zram->table[index].ac_time = 0;
 #endif
+
+#if IS_ENABLED(CONFIG_EXPANDMEM)
+	if (vh_zram_free_page != NULL)
+		vh_zram_free_page(zram, index);
+#endif
+
 	if (zram_test_flag(zram, index, ZRAM_IDLE))
 		zram_clear_flag(zram, index, ZRAM_IDLE);
 
@@ -1243,6 +1210,16 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 	int ret;
 
 	zram_slot_lock(zram, index);
+
+#if IS_ENABLED(CONFIG_EXPANDMEM)
+	if (vh__zram_bvec_read != NULL) {
+		vh__zram_bvec_read(bio, zram, index, &ret);
+		if (unlikely(ret)) {
+			return ret;
+		}
+	}
+#endif
+
 	if (zram_test_flag(zram, index, ZRAM_WB)) {
 		struct bio_vec bvec;
 
@@ -1439,6 +1416,12 @@ out:
 		zram_set_handle(zram, index, handle);
 		zram_set_obj_size(zram, index, comp_len);
 	}
+
+#if IS_ENABLED(CONFIG_EXPANDMEM)
+	if (vh__zram_bvec_write != NULL)
+		vh__zram_bvec_write(zram, index, page->mem_cgroup);
+#endif
+
 	zram_slot_unlock(zram, index);
 
 	/* Update stats */
@@ -1629,6 +1612,9 @@ static void zram_slot_free_notify(struct block_device *bdev,
 				unsigned long index)
 {
 	struct zram *zram;
+#if IS_ENABLED(CONFIG_EXPANDMEM)
+	int ret;
+#endif
 
 	zram = bdev->bd_disk->private_data;
 
@@ -1637,6 +1623,15 @@ static void zram_slot_free_notify(struct block_device *bdev,
 		atomic64_inc(&zram->stats.miss_free);
 		return;
 	}
+
+#if IS_ENABLED(CONFIG_EXPANDMEM)
+	if (vh_zram_slot_free_notify != NULL) {
+		vh_zram_slot_free_notify(zram, index, &ret);
+		if (ret) {
+			return;
+		}
+	}
+#endif
 
 	zram_free_page(zram, index);
 	zram_slot_unlock(zram, index);
@@ -1764,6 +1759,11 @@ static ssize_t disksize_store(struct device *dev,
 
 	revalidate_disk_size(zram->disk, true);
 	up_write(&zram->init_lock);
+
+#if IS_ENABLED(CONFIG_EXPANDMEM)
+	if (vh_disksize_store != NULL)
+		vh_disksize_store(zram);
+#endif
 
 	return len;
 

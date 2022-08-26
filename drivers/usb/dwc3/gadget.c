@@ -3647,7 +3647,7 @@ static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc)
 	int			reg;
 
 	dwc3_gadget_set_link_state(dwc, DWC3_LINK_STATE_RX_DET);
-
+	dev_info(dwc->dev, "%s\n", __func__);
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
 	reg &= ~DWC3_DCTL_INITU1ENA;
 	reg &= ~DWC3_DCTL_INITU2ENA;
@@ -3705,7 +3705,7 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 		if (dwc->setup_packet_pending)
 			dwc3_gadget_disconnect_interrupt(dwc);
 	}
-
+	dev_info(dwc->dev, "%s\n", __func__);
 	dwc3_reset_gadget(dwc);
 	/*
 	 * In the Synopsis DesignWare Cores USB3 Databook Rev. 3.30a
@@ -3880,6 +3880,7 @@ static void dwc3_gadget_wakeup_interrupt(struct dwc3 *dwc)
 	 * TODO take core out of low power mode when that's
 	 * implemented.
 	 */
+	dev_info(dwc->dev, "%s\n", __func__);
 
 	if (dwc->async_callbacks && dwc->gadget_driver->resume) {
 		spin_unlock(&dwc->lock);
@@ -3990,7 +3991,7 @@ static void dwc3_gadget_suspend_interrupt(struct dwc3 *dwc,
 					  unsigned int evtinfo)
 {
 	enum dwc3_link_state next = evtinfo & DWC3_LINK_STATE_MASK;
-
+	dev_info(dwc->dev, "%s Entry to %d\n", __func__, next);
 	if (dwc->link_state != next && next == DWC3_LINK_STATE_U3)
 		dwc3_suspend_gadget(dwc);
 

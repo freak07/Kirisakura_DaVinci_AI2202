@@ -1,0 +1,7 @@
+#menu "ASUS POWER DEBUG"
+
+config ASUS_POWER_DEBUG
+	tristate "ASUS POWER DEBUG"
+	default n
+
+#endmenu

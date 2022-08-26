@@ -268,11 +268,15 @@ static int usbhid_restart_ctrl_queue(struct usbhid_device *usbhid)
  * Input interrupt completion handler.
  */
 
+u8 volatile key_state = 0;
+EXPORT_SYMBOL(key_state);
+
 static void hid_irq_in(struct urb *urb)
 {
 	struct hid_device	*hid = urb->context;
 	struct usbhid_device	*usbhid = hid->driver_data;
 	int			status;
+	u8	buffer_ret[2];
 
 	switch (urb->status) {
 	case 0:			/* success */
@@ -293,6 +297,12 @@ static void hid_irq_in(struct urb *urb)
 				set_bit(HID_KEYS_PRESSED, &usbhid->iofl);
 			else
 				clear_bit(HID_KEYS_PRESSED, &usbhid->iofl);
+		}
+
+		if ( (hid->vendor == 0x0BDA) && ( (hid->product == 0x4BF0) || (hid->product == 0x4A80) ) ){
+			memcpy(buffer_ret, urb->transfer_buffer, sizeof(buffer_ret));
+			pr_info("%s(%d)buf0:%x,buf1:%x\n",__func__, __LINE__, buffer_ret[0], buffer_ret[1]);
+			key_state = buffer_ret[1];
 		}
 		break;
 	case -EPIPE:		/* stall */

@@ -778,6 +778,7 @@ static void log_failure_reason(const struct pil_tz_data *d)
 
 	strlcpy(reason, smem_reason, min(size, (size_t)MAX_SSR_REASON_LEN));
 	pr_err("%s subsystem failure reason: %s.\n", name, reason);
+	subsys_save_reason(name, reason);/*AS-K ASUS SSR and Debug - Save SSR reason+*/
 }
 
 static int subsys_shutdown(const struct subsys_desc *subsys, bool force_stop)
@@ -1553,6 +1554,8 @@ static int pil_tz_generic_probe(struct platform_device *pdev)
 		rc = PTR_ERR(d->subsys);
 		goto err_subsys;
 	}
+	pr_err("%s: probe %s device\n",
+			__func__, d->subsys_desc.name);
 
 	rc = subsys_setup_irqs(pdev);
 	if (rc) {

@@ -52,12 +52,20 @@
 #define WLS_FW_BUF_SIZE			128
 #define DEFAULT_RESTRICT_FCC_UA		1000000
 
+#if defined ASUS_AI2202_PROJECT
+extern int asuslib_init(void);
+extern int asuslib_deinit(void);
+extern void asus_monitor_start(int status);
+extern void set_qc_stat(int status);
+#else
+//Move to battery_charger.h
 enum psy_type {
 	PSY_TYPE_BATTERY,
 	PSY_TYPE_USB,
 	PSY_TYPE_WLS,
 	PSY_TYPE_MAX,
 };
+#endif
 
 enum ship_mode_type {
 	SHIP_MODE_PMIC,
@@ -202,6 +210,10 @@ struct battery_charger_ship_mode_req_msg {
 	u32			ship_mode_type;
 };
 
+#if defined ASUS_AI2202_PROJECT
+//ASUS_BSP : Move battery_chg_dev to battery_charger.h
+extern struct battery_chg_dev *g_bcdev;
+#else
 struct psy_state {
 	struct power_supply	*psy;
 	char			*model;
@@ -248,6 +260,7 @@ struct battery_chg_dev {
 	/* To track the driver initialization status */
 	bool				initialized;
 };
+#endif
 
 static const int battery_prop_map[BATT_PROP_MAX] = {
 	[BATT_STATUS]		= POWER_SUPPLY_PROP_STATUS,
@@ -330,8 +343,16 @@ static int battery_chg_fw_write(struct battery_chg_dev *bcdev, void *data,
 	return rc;
 }
 
+#if defined ASUS_AI2202_PROJECT
+//ASUS_BSP : remove the static use of battery_chg_write
+//static int battery_chg_write(struct battery_chg_dev *bcdev, void *data,
+//				int len)
+int battery_chg_write(struct battery_chg_dev *bcdev, void *data,
+				int len)
+#else
 static int battery_chg_write(struct battery_chg_dev *bcdev, void *data,
 				int len)
+#endif
 {
 	int rc;
 
@@ -651,6 +672,7 @@ static void battery_chg_update_usb_type_work(struct work_struct *work)
 		bcdev->usb_icl_ua = 0;
 
 	pr_debug("usb_adap_type: %u\n", pst->prop[USB_ADAP_TYPE]);
+	printk(KERN_ERR "[BAT][CHG]" "Debug USB_ADAP_TYPE %d", pst->prop[USB_ADAP_TYPE]);
 
 	switch (pst->prop[USB_ADAP_TYPE]) {
 	case POWER_SUPPLY_USB_TYPE_SDP:
@@ -937,9 +959,18 @@ static int usb_psy_get_prop(struct power_supply *psy,
 	if (rc < 0)
 		return rc;
 
+#if defined ASUS_AI2202_PROJECT
+	pval->intval = pst->prop[prop_id];
+	if (prop == POWER_SUPPLY_PROP_TEMP){
+		pval->intval = DIV_ROUND_CLOSEST((int)pval->intval, 10);
+	}else if(prop == POWER_SUPPLY_PROP_ONLINE){
+		asus_monitor_start(pval->intval);
+	}
+#else
 	pval->intval = pst->prop[prop_id];
 	if (prop == POWER_SUPPLY_PROP_TEMP)
 		pval->intval = DIV_ROUND_CLOSEST((int)pval->intval, 10);
+#endif
 
 	return 0;
 }
@@ -1112,6 +1143,12 @@ static int battery_psy_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT_MAX:
 		pval->intval = bcdev->num_thermal_levels;
 		break;
+#if defined ASUS_AI2202_PROJECT
+	case POWER_SUPPLY_PROP_STATUS:
+		pval->intval = pst->prop[prop_id];
+		set_qc_stat(pval->intval);
+		break;
+#endif
 	default:
 		pval->intval = pst->prop[prop_id];
 		break;
@@ -2046,6 +2083,13 @@ static int battery_chg_probe(struct platform_device *pdev)
 	device_init_wakeup(bcdev->dev, true);
 	schedule_work(&bcdev->usb_type_work);
 
+#if defined ASUS_AI2202_PROJECT
+	//[+++]ASUS_BSP : Add for OEM sub-function
+	g_bcdev = bcdev;
+	asuslib_init();
+	//[+++]ASUS_BSP : Add for OEM sub-function
+#endif
+
 	return 0;
 error:
 	bcdev->initialized = false;
@@ -2064,6 +2108,11 @@ static int battery_chg_remove(struct platform_device *pdev)
 	debugfs_remove_recursive(bcdev->debugfs_dir);
 	class_unregister(&bcdev->battery_class);
 	unregister_reboot_notifier(&bcdev->reboot_notifier);
+
+#if defined ASUS_AI2202_PROJECT
+	asuslib_deinit();//ASUS_BSP : Add for sub-function
+#endif
+
 	rc = pmic_glink_unregister_client(bcdev->client);
 	if (rc < 0) {
 		pr_err("Error unregistering from pmic_glink, rc=%d\n", rc);
@@ -2078,10 +2127,19 @@ static const struct of_device_id battery_chg_match_table[] = {
 	{},
 };
 
+#if defined ASUS_AI2202_PROJECT
+static const struct dev_pm_ops asus_chg_pm_ops = {
+	.resume		= asus_chg_resume,
+};
+#endif
+
 static struct platform_driver battery_chg_driver = {
 	.driver = {
 		.name = "qti_battery_charger",
 		.of_match_table = battery_chg_match_table,
+#if defined ASUS_AI2202_PROJECT
+		.pm	= &asus_chg_pm_ops,
+#endif
 	},
 	.probe = battery_chg_probe,
 	.remove = battery_chg_remove,

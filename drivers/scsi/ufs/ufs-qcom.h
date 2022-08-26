@@ -345,6 +345,22 @@ struct ufs_qcom_thermal {
 	unsigned long curr_state;
 };
 
+#ifdef CONFIG_SCSI_UFS_ASUS	
+struct asus_ufs_info {
+	struct device_attribute ufs_total_size_attr;
+	struct device_attribute ufs_size_attr;
+	struct device_attribute ufs_preEOL_attr;
+	struct device_attribute ufs_health_A_attr;
+	struct device_attribute ufs_health_B_attr;
+	struct device_attribute ufs_status_attr;
+	struct device_attribute ufs_productID_attr;
+	struct device_attribute ufs_fw_version_attr;
+	u64 ufs_size;
+	char ufs_total_size[10];
+	char ufs_status[32];
+};
+#endif
+
 struct ufs_qcom_host {
 	/*
 	 * Set this capability if host controller supports the QUniPro mode
@@ -444,7 +460,6 @@ struct ufs_qcom_host {
 	void *ufs_ipc_log_ctx;
 	bool dbg_en;
 	struct nvmem_cell *nvmem_cell;
-
 	/* Multi level clk scaling Support */
 	bool ml_scale_sup;
 	bool is_turbo_enabled;
@@ -468,6 +483,9 @@ struct ufs_qcom_host {
 	u32 clk_next_mode;
 	u32 clk_curr_mode;
 	bool is_clk_scale_enabled;
+#ifdef CONFIG_SCSI_UFS_ASUS	
+	struct asus_ufs_info ufs_info;
+#endif
 };
 
 static inline u32

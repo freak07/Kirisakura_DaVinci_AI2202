@@ -38,19 +38,29 @@
 /*****************************************************************************
 * Private constant and macro definitions using #define
 *****************************************************************************/
-#define FTS_FW_REQUEST_SUPPORT                      1
+#define FTS_FW_REQUEST_SUPPORT                      0
 /* Example: focaltech_ts_fw_tianma.bin */
 #define FTS_FW_NAME_PREX_WITH_REQUEST               "focaltech_ts_fw_"
 
 /*****************************************************************************
 * Global variable or extern global variabls/functions
 *****************************************************************************/
-u8 fw_file[1] = {
-0,
+u8 fw_file[] = {
+#include FTS_UPGRADE_FW_FILE
+};
+
+u8 fw_file2[] = {
+#include FTS_UPGRADE_FW2_FILE
+};
+
+u8 fw_file3[] = {
+#include FTS_UPGRADE_FW3_FILE
 };
 
 struct upgrade_module module_list[] = {
-	{FTS_MODULE_ID, FTS_MODULE_NAME, fw_file, sizeof(fw_file)},
+    {FTS_MODULE_ID, FTS_MODULE_NAME, fw_file, sizeof(fw_file)},
+    {FTS_MODULE2_ID, FTS_MODULE2_NAME, fw_file2, sizeof(fw_file2)},
+    {FTS_MODULE3_ID, FTS_MODULE3_NAME, fw_file3, sizeof(fw_file3)},
 };
 
 struct upgrade_func *upgrade_func_list[] = {
@@ -1846,11 +1856,11 @@ static int fts_get_fw_file_via_request_firmware(struct fts_upgrade *upg)
 		return -EINVAL;
 	}
 
-	if (upg->ts_data->pdata->type == _FT3658U)
+/*	if (upg->ts_data->pdata->type == _FT3658U)
 		snprintf(fwname, FILE_NAME_LENGTH, "%s%s_ft3658.bin",
 				FTS_FW_NAME_PREX_WITH_REQUEST,
 				upg->module_info->vendor_name);
-	else
+	else*/
 		snprintf(fwname, FILE_NAME_LENGTH, "%s%s.bin",
 				FTS_FW_NAME_PREX_WITH_REQUEST,
 				upg->module_info->vendor_name);

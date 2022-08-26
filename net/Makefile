@@ -89,3 +89,5 @@ obj-$(CONFIG_NET_NCSI)		+= ncsi/
 obj-$(CONFIG_XDP_SOCKETS)	+= xdp/
 obj-$(CONFIG_MPTCP)		+= mptcp/
 obj-$(CONFIG_NEURON)		+= neuron/
+
+obj-$(CONFIG_SLA_STAIC_COLLECT) += sla/

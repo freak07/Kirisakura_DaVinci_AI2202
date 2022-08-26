@@ -97,6 +97,14 @@ ufs_qcom.ko
 arm_smmu.ko
 msm-geni-se.ko
 mem-offline.ko
+sched-walt-debug.ko
+aw_haptic.ko
+pn553.ko
+p73.ko
+sx932x_davinci.ko
+ms51_phone.ko
+gf_spi.ko
+asusdebug.ko
 qcom_aoss.ko
 msm_qmp.ko
 qcom_rimps.ko

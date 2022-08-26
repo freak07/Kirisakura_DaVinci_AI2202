@@ -330,8 +330,7 @@ clks_gdsc_off:
 	clk_bulk_disable_unprepare(gmu->num_clks, gmu->clks);
 
 gdsc_off:
-	/* Poll to make sure that the CX is off */
-	gen7_cx_regulator_disable_wait(gmu->cx_gdsc, device, 5000);
+	gen7_gmu_disable_gdsc(adreno_dev);
 
 	gen7_rdpm_cx_freq_update(gmu, 0);
 
@@ -399,8 +398,7 @@ clks_gdsc_off:
 	clk_bulk_disable_unprepare(gmu->num_clks, gmu->clks);
 
 gdsc_off:
-	/* Poll to make sure that the CX is off */
-	gen7_cx_regulator_disable_wait(gmu->cx_gdsc, device, 5000);
+	gen7_gmu_disable_gdsc(adreno_dev);
 
 	gen7_rdpm_cx_freq_update(gmu, 0);
 
@@ -487,8 +485,7 @@ static int gen7_hwsched_gmu_power_off(struct adreno_device *adreno_dev)
 
 	clk_bulk_disable_unprepare(gmu->num_clks, gmu->clks);
 
-	/* Poll to make sure that the CX is off */
-	gen7_cx_regulator_disable_wait(gmu->cx_gdsc, device, 5000);
+	gen7_gmu_disable_gdsc(adreno_dev);
 
 	gen7_rdpm_cx_freq_update(gmu, 0);
 
@@ -722,6 +719,13 @@ static int gen7_hwsched_power_off(struct adreno_device *adreno_dev)
 	int ret = 0;
 
 	if (!test_bit(GMU_PRIV_GPU_STARTED, &gmu->flags))
+		return 0;
+
+	/*
+	* If this config is enabled, the smmu driver keeps the cx gdsc always
+	* ON. So it is better if we don't turn off the GPU
+	*/
+	if (IS_ENABLED(CONFIG_ARM_SMMU_POWER_ALWAYS_ON))
 		return 0;
 
 	trace_kgsl_pwr_request_state(device, KGSL_STATE_SLUMBER);
