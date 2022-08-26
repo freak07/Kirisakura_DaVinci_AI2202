@@ -59,8 +59,6 @@ void cam_flash_put_source_node_data(struct cam_flash_ctrl *fctrl)
 	}
 }
 
-#if __or(IS_REACHABLE(CONFIG_LEDS_QPNP_FLASH_V2), \
-			IS_REACHABLE(CONFIG_LEDS_QTI_FLASH))
 static int32_t cam_get_source_node_info(
 	struct device_node *of_node,
 	struct cam_flash_ctrl *fctrl,
@@ -269,7 +267,6 @@ static int32_t cam_get_source_node_info(
 
 	return rc;
 }
-#endif
 
 int cam_flash_get_dt_data(struct cam_flash_ctrl *fctrl,
 	struct cam_hw_soc_info *soc_info)

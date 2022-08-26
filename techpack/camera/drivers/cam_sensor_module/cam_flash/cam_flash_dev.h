@@ -25,6 +25,8 @@
 #include <linux/leds-qti-flash.h>
 #endif
 
+#include <linux/leds-qti-flash.h>
+
 #include "cam_req_mgr_util.h"
 #include "cam_req_mgr_interface.h"
 #include "cam_subdev.h"
