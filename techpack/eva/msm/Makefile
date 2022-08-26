@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
 ccflags-y += -I$(srctree)/techpack/eva/msm/eva/ \
-    -I$(srctree)/drivers/media/platform/msm/synx/
+    -I$(srctree)/drivers/media/platform/msm/synx/ \
+    -I$(srctree)/techpack/eva/msm/eva/include/uapi/eva/
+
+ccflags-$(CONFIG_MSM_GLOBAL_SYNX) += -I$(KERNEL_ROOT)/drivers/media/platform/msm/synx
 
 msm-eva-objs := eva/cvp.o \
                 eva/msm_cvp_ioctl.o \

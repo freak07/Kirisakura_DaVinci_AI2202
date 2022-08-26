@@ -1,4 +1,5 @@
-KBUILD_OPTIONS+= EVA_ROOT=$(KERNEL_SRC)/$(M)
+KBUILD_OPTIONS += EVA_ROOT=$(srctree)/techpack/camera
+KBUILD_OPTIONS += KERNEL_ROOT=$(srctree)
 
 all:
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) modules $(KBUILD_OPTIONS)

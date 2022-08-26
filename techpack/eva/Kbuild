@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+EVA_ROOT = $(srctree)/techpack/eva
+
 # auto-detect subdirs
 obj-y +=msm/
