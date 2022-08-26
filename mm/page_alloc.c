@@ -3835,11 +3835,15 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 	 * need to be calculated.
 	 */
 	if (!order) {
-		long fast_free;
+		long usable_free;
+		long reserved;
 
-		fast_free = free_pages;
-		fast_free -= __zone_watermark_unusable_free(z, 0, alloc_flags);
-		if (fast_free > mark + z->lowmem_reserve[highest_zoneidx])
+		usable_free = free_pages;
+		reserved = __zone_watermark_unusable_free(z, 0, alloc_flags);
+
+		/* reserved may over estimate high-atomic reserves. */
+		usable_free -= min(usable_free, reserved);
+		if (usable_free > mark + z->lowmem_reserve[highest_zoneidx])
 			return true;
 	}
 
@@ -4790,7 +4794,9 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	int no_progress_loops;
 	unsigned int cpuset_mems_cookie;
 	int reserve_flags;
+	unsigned long vh_record;
 
+	trace_android_vh_alloc_pages_slowpath_begin(gfp_mask, order, &vh_record);
 	/*
 	 * We also sanity check to catch abuse of atomic reserves being used by
 	 * callers that are not in atomic context.
@@ -5032,6 +5038,7 @@ fail:
 	warn_alloc(gfp_mask, ac->nodemask,
 			"page allocation failure: order:%u", order);
 got_pg:
+	trace_android_vh_alloc_pages_slowpath_end(gfp_mask, order, vh_record);
 	return page;
 }
 
@@ -5180,6 +5187,7 @@ static inline void free_the_page(struct page *page, unsigned int order)
 
 void __free_pages(struct page *page, unsigned int order)
 {
+	trace_android_vh_free_pages(page, order);
 	if (put_page_testzero(page))
 		free_the_page(page, order);
 	else if (!PageHead(page))
@@ -5642,6 +5650,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		free_pcp,
 		global_zone_page_state(NR_FREE_CMA_PAGES));
 
+	trace_android_vh_show_mapcount_pages(NULL);
 	for_each_online_pgdat(pgdat) {
 		if (show_mem_node_skip(filter, pgdat->node_id, nodemask))
 			continue;
@@ -5817,7 +5826,7 @@ static int build_zonerefs_node(pg_data_t *pgdat, struct zoneref *zonerefs)
 	do {
 		zone_type--;
 		zone = pgdat->node_zones + zone_type;
-		if (managed_zone(zone)) {
+		if (populated_zone(zone)) {
 			zoneref_set_zone(zone, &zonerefs[nr_zones++]);
 			check_highest_zone(zone_type);
 		}
@@ -7847,7 +7856,7 @@ void __init mem_init_print_info(const char *str)
 	 */
 #define adj_init_size(start, end, size, pos, adj) \
 	do { \
-		if (start <= pos && pos < end && size > adj) \
+		if (&start[0] <= &pos[0] && &pos[0] < &end[0] && size > adj) \
 			size -= adj; \
 	} while (0)
 
