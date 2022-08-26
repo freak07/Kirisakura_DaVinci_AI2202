@@ -550,6 +550,7 @@ static const __initconst char * const blacklist[] = {
 	"kiwi",
 	"wcd937x_dlkm",
 	"wcd937x_slave_dlkm",
+	"llcc_perfmon",
 	NULL
 };
 
