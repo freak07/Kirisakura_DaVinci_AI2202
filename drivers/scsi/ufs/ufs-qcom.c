@@ -119,29 +119,6 @@ static int ufs_qcom_mod_min_cpufreq(unsigned int cpu, s32 new_val);
 static void ufs_qcom_hook_clock_scaling(void *used, struct ufs_hba *hba, bool *force_out,
 		bool *force_saling, bool *scale_up);
 
-static inline void cancel_dwork_unvote_cpufreq(struct ufs_hba *hba)
-{
-	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
-	int err;
-
-	if (host->cpufreq_dis)
-		return;
-
-	cancel_delayed_work_sync(&host->fwork);
-	if (!host->cur_freq_vote)
-		return;
-	atomic_set(&host->num_reqs_threshold, 0);
-
-	err = ufs_qcom_mod_min_cpufreq(host->config_cpu,
-				       host->min_cpu_scale_freq);
-	if (err < 0)
-		dev_err(hba->dev, "fail set cpufreq-fmin_def %d:\n",
-				err);
-	else
-		host->cur_freq_vote = false;
-	dev_dbg(hba->dev, "%s,err=%d\n", __func__, err);
-}
-
 static int ufs_qcom_get_pwr_dev_param(struct ufs_qcom_dev_params *qcom_param,
 				      struct ufs_pa_layer_attr *dev_max,
 				      struct ufs_pa_layer_attr *agreed_pwr)
@@ -601,12 +578,6 @@ static int ufs_qcom_power_up_sequence(struct ufs_hba *hba)
 	enum phy_mode mode = (host->limit_rate == PA_HS_MODE_B) ?
 					PHY_MODE_UFS_HS_B : PHY_MODE_UFS_HS_A;
 	int submode = host->limit_phy_submode;
-
-	/* Reset UFS Host Controller and PHY */
-	ret = ufs_qcom_host_reset(hba);
-	if (ret)
-		dev_warn(hba->dev, "%s: host reset returned %d\n",
-				  __func__, ret);
 
 	if (host->hw_ver.major < 0x4)
 		submode = UFS_QCOM_PHY_SUBMODE_NON_G4;
@@ -1369,8 +1340,34 @@ static void ufs_qcom_cpufreq_dwork(struct work_struct *work)
 	dev_dbg(host->hba->dev, "cur_freq_vote=%d,freq_val=%u,cth=%u\n",
 		host->cur_freq_vote, freq_val, cur_thres);
 out:
+	/*
+	 * See ufs_qcom_suspend(), ufs_qcom_resume(), ufs_qcom_clk_scale_notify()
+	 *
+	 * Work rearms itself as per below table:
+	 * cur_freq_vote | scaled_up | host_active |	Result
+	 *  0			0	0		Exit work
+	 *  0			0	1		Exit work
+	 *  0			1	0		Exit work
+	 *  0			1	1		Requeue work
+	 *  1			0	0		Requeue work
+	 *  1			0	1		Requeue work
+	 *  1			1	0		Requeue work
+	 *  1			1	1		Requeue work
+	 */
+	mutex_lock(&host->cpufreq_lock);
+	if ((!host->cur_freq_vote && !(!!atomic_read(&host->scale_up)) &&
+	    !host->active) ||
+	    (!host->cur_freq_vote && !(!!atomic_read(&host->scale_up)) &&
+	     host->active) ||
+	     (!host->cur_freq_vote && !!atomic_read(&host->scale_up) &&
+	      !host->active)) {
+		mutex_unlock(&host->cpufreq_lock);
+		return;
+	}
+
 	queue_delayed_work(host->ufs_qos->workq, &host->fwork,
 			   msecs_to_jiffies(UFS_QCOM_LOAD_MON_DLY_MS));
+	mutex_unlock(&host->cpufreq_lock);
 }
 
 static int add_group_qos(struct qos_cpu_group *qcg, enum constraint type)
@@ -1452,7 +1449,10 @@ static int ufs_qcom_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 			hba->curr_dev_pwr_mode, err);
 	ufs_qcom_ice_disable(host);
 
-	cancel_dwork_unvote_cpufreq(hba);
+	/* Refer ufs_qcom_cpufreq_dwork() */
+	mutex_lock(&host->cpufreq_lock);
+	host->active = false;
+	mutex_unlock(&host->cpufreq_lock);
 	return err;
 }
 
@@ -1476,6 +1476,15 @@ static int ufs_qcom_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	ufs_qcom_log_str(host, "$,%d,%d,%d,%d,%d,%d\n",
 			pm_op, hba->rpm_lvl, hba->spm_lvl, hba->uic_link_state,
 			hba->curr_dev_pwr_mode, err);
+
+	/* Refer ufs_qcom_cpufreq_dwork() */
+	mutex_lock(&host->cpufreq_lock);
+	host->active = true;
+	/* Reschedule the work if it exited when the clocks were scaled up */
+	if (!!atomic_read(&host->scale_up))
+		queue_delayed_work(host->fworkq, &host->fwork, 0);
+	mutex_unlock(&host->cpufreq_lock);
+
 	return 0;
 }
 
@@ -2920,7 +2929,14 @@ static int ufs_qcom_setup_qos(struct ufs_hba *hba)
 				err);
 			host->cpufreq_dis = true;
 		} else {
-			INIT_DELAYED_WORK(&host->fwork, ufs_qcom_cpufreq_dwork);
+			/* Prone to deadlocks, hence create its own workqueue */
+			host->fworkq =
+				create_singlethread_workqueue("ufs_cpufreq_wq");
+			if (host->fworkq) {
+				INIT_DELAYED_WORK(&host->fwork,
+						  ufs_qcom_cpufreq_dwork);
+				mutex_init(&host->cpufreq_lock);
+			}
 		}
 	}
 	qr->workq = create_singlethread_workqueue("qc_ufs_qos_swq");
@@ -3128,6 +3144,7 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 	struct resource *res;
 	struct ufs_qcom_thermal *ut;
 	struct ufs_clk_info *clki;
+	struct device_node *np = dev->of_node;
 
 	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
 	if (!host) {
@@ -3143,6 +3160,8 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 #if defined(CONFIG_UFS_DBG)
 	host->dbg_en = true;
 #endif
+	host->crash_on_err =
+		of_property_read_bool(np, "qcom,enable_crash_on_err");
 
 	/* Setup the reset control of HCI */
 	host->core_reset = devm_reset_control_get(hba->dev, "rst");
@@ -3795,14 +3814,16 @@ static int ufs_qcom_clk_scale_notify(struct ufs_hba *hba,
 			err = ufs_qcom_clk_scale_up_pre_change(hba);
 			if (!host->cpufreq_dis && !atomic_read(&host->scale_up)) {
 				atomic_set(&host->num_reqs_threshold, 0);
-				queue_delayed_work(host->ufs_qos->workq,
-						  &host->fwork,
-					msecs_to_jiffies(
-						UFS_QCOM_LOAD_MON_DLY_MS));
+				/* ensure that work is queued */
+				mutex_lock(&host->cpufreq_lock);
+				queue_delayed_work(host->fworkq, &host->fwork,
+						   msecs_to_jiffies(
+						   UFS_QCOM_LOAD_MON_DLY_MS));
+				atomic_set(&host->scale_up, scale_up);
+				mutex_unlock(&host->cpufreq_lock);
 			}
 		} else {
 			err = ufs_qcom_clk_scale_down_pre_change(hba);
-			cancel_dwork_unvote_cpufreq(hba);
 		}
 		if (err)
 			ufshcd_uic_hibern8_exit(hba);
@@ -4149,7 +4170,11 @@ void ufs_qcom_read_nvmem_cell(struct ufs_qcom_host *host)
 	 * Value = 0 : UFS 3.x
 	 * Value = 1 : UFS 2.x
 	 */
-	host->limit_phy_submode = !ufs_dev;
+	if (host->ufs_dev_revert)
+		host->limit_phy_submode = ufs_dev;
+	else
+		host->limit_phy_submode = !ufs_dev;
+
 	if (host->limit_phy_submode)
 		dev_info(host->hba->dev, "(%s) UFS device is 3.x, phy_submode = %d\n",
 						__func__, host->limit_phy_submode);
@@ -4188,6 +4213,7 @@ static void ufs_qcom_parse_limits(struct ufs_qcom_host *host)
 	of_property_read_u32(np, "limit-rate", &host->limit_rate);
 	of_property_read_u32(np, "limit-phy-submode", &host->limit_phy_submode);
 	of_property_read_u32(np, "ufs-dev-types", &host->ufs_dev_types);
+	host->ufs_dev_revert = of_property_read_bool(np, "qcom,ufs-dev-revert");
 
 	if (host->ufs_dev_types >= 2)
 		ufs_qcom_read_nvmem_cell(host);
@@ -4319,13 +4345,17 @@ static void ufs_qcom_parse_lpm(struct ufs_qcom_host *host)
 static int ufs_qcom_device_reset(struct ufs_hba *hba)
 {
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
+	int ret;
+
+	/* Reset UFS Host Controller and PHY */
+	ret = ufs_qcom_host_reset(hba);
+	if (ret)
+		dev_warn(hba->dev, "%s: host reset returned %d\n",
+					__func__, ret);
 
 	/* reset gpio is optional */
 	if (!host->device_reset)
 		return -EOPNOTSUPP;
-
-	/* disable hba before device reset */
-	ufshcd_hba_stop(hba);
 
 	/*
 	 * The UFS device shall detect reset pulses of 1us, sleep for 10us to

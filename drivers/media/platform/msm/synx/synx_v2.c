@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/poll.h>
 #include <linux/random.h>
+#include <linux/remoteproc/qcom_rproc.h>
 #include <linux/slab.h>
 #include <linux/sync_file.h>
 #include <linux/uaccess.h>
@@ -427,7 +428,7 @@ int synx_native_signal_core(struct synx_coredata *synx_obj,
 	return rc;
 }
 
-static int synx_native_signal_fence(struct synx_coredata *synx_obj,
+int synx_native_signal_fence(struct synx_coredata *synx_obj,
 	u32 status)
 {
 	int rc = 0;
@@ -518,6 +519,7 @@ void synx_signal_handler(struct work_struct *cb_dispatch)
 			dprintk(SYNX_ERR,
 				"global status update of %u failed=%d\n",
 				h_synx, rc);
+		synx_global_put_ref(idx);
 	}
 
 	/*
@@ -2425,9 +2427,9 @@ int synx_ipc_callback(u32 client_id,
 	if (IS_ERR_OR_NULL(signal_cb))
 		return -SYNX_NOMEM;
 
-	dprintk(SYNX_DBG,
-		"ipc signal handle %u, status %u, data %llu\n",
-		handle, status, data);
+	dprintk(SYNX_INFO,
+		"signal notification for %u received with status %u\n",
+		handle, status);
 
 	signal_cb->status = status;
 	signal_cb->handle = handle;
@@ -2439,6 +2441,29 @@ int synx_ipc_callback(u32 client_id,
 	return SYNX_SUCCESS;
 }
 EXPORT_SYMBOL(synx_ipc_callback);
+
+int synx_recover(enum synx_client_id id)
+{
+	u32 core_id;
+
+	core_id = synx_util_map_client_id_to_core(id);
+	if (core_id >= SYNX_CORE_MAX) {
+		dprintk(SYNX_ERR, "invalid client id %u\n", id);
+		return -SYNX_INVALID;
+	}
+
+	switch (core_id) {
+	case SYNX_CORE_EVA:
+	case SYNX_CORE_IRIS:
+		break;
+	default:
+		dprintk(SYNX_ERR, "recovery not supported on %u\n", id);
+		return -SYNX_NOSUPPORT;
+	}
+
+	return synx_global_recover(core_id);
+}
+EXPORT_SYMBOL(synx_recover);
 
 static int synx_local_mem_init(void)
 {
@@ -2460,6 +2485,40 @@ static int synx_local_mem_init(void)
 	/* zero idx not allowed */
 	set_bit(0, synx_dev->native->bitmap);
 	return 0;
+}
+
+static int synx_cdsp_restart_notifier(struct notifier_block *nb,
+	unsigned long code, void *data)
+{
+	struct synx_cdsp_ssr *cdsp_ssr = &synx_dev->cdsp_ssr;
+
+	if (&cdsp_ssr->nb != nb) {
+		dprintk(SYNX_ERR, "Invalid SSR Notifier block\n");
+		return NOTIFY_BAD;
+	}
+
+	switch (code) {
+	case QCOM_SSR_BEFORE_SHUTDOWN:
+		break;
+	case QCOM_SSR_AFTER_SHUTDOWN:
+		if (cdsp_ssr->ssrcnt != 0) {
+			dprintk(SYNX_INFO, "Cleaning up global memory\n");
+			synx_global_recover(SYNX_CORE_NSP);
+		}
+		break;
+	case QCOM_SSR_BEFORE_POWERUP:
+		break;
+	case QCOM_SSR_AFTER_POWERUP:
+		dprintk(SYNX_DBG, "CDSP is up");
+		if (cdsp_ssr->ssrcnt == 0)
+			cdsp_ssr->ssrcnt++;
+		break;
+	default:
+		dprintk(SYNX_ERR, "Unknown status code for CDSP SSR\n");
+		break;
+	}
+
+	return NOTIFY_DONE;
 }
 
 static int __init synx_init(void)
@@ -2513,6 +2572,15 @@ static int __init synx_init(void)
 	rc = synx_global_mem_init();
 	if (rc) {
 		dprintk(SYNX_ERR, "shared mem init failed, err=%d\n", rc);
+		goto err;
+	}
+
+	synx_dev->cdsp_ssr.ssrcnt = 0;
+	synx_dev->cdsp_ssr.nb.notifier_call = synx_cdsp_restart_notifier;
+	synx_dev->cdsp_ssr.handle =
+		qcom_register_ssr_notifier("cdsp", &synx_dev->cdsp_ssr.nb);
+	if (synx_dev->cdsp_ssr.handle == NULL) {
+		dprintk(SYNX_ERR, "SSR registration failed\n");
 		goto err;
 	}
 

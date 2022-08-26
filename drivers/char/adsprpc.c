@@ -60,6 +60,8 @@
 #include <linux/dma-iommu.h>
 #include <asm/arch_timer.h>
 
+#include <trace/events/rproc_qcom.h>
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/fastrpc.h>
 
@@ -2042,7 +2044,7 @@ static int context_alloc(struct fastrpc_file *fl, uint32_t kernel,
 		sizeof(*ctx->overs) * (bufs) +
 		sizeof(*ctx->overps) * (bufs);
 
-	VERIFY(err, NULL != (ctx = kzalloc(sizeof(*ctx) + size, GFP_KERNEL)));
+	VERIFY(err, NULL != (ctx = kvzalloc(sizeof(*ctx) + size, GFP_KERNEL)));
 	if (err) {
 		err = -ENOMEM;
 		goto bail;
@@ -2130,7 +2132,11 @@ static int context_alloc(struct fastrpc_file *fl, uint32_t kernel,
 		if (err)
 			goto bail;
 	}
-
+	VERIFY(err, VALID_FASTRPC_CID(cid));
+	if (err) {
+		err = -ECHRNG;
+		goto bail;
+	}
 	chan = &me->channel[cid];
 
 	spin_lock_irqsave(&chan->ctxlock, irq_flags);
@@ -2238,7 +2244,7 @@ static void context_free(struct smq_invoke_ctx *ctx)
 
 	trace_fastrpc_context_free((uint64_t)ctx,
 		ctx->msg.invoke.header.ctx, ctx->handle, ctx->sc);
-	kfree(ctx);
+	kvfree(ctx);
 }
 
 static void fastrpc_queue_completed_async_job(struct smq_invoke_ctx *ctx)
@@ -2929,7 +2935,7 @@ static int put_args(uint32_t kernel, struct smq_invoke_ctx *ctx,
 
 	remote_arg64_t *rpra = ctx->lrpra;
 	int i, inbufs, outbufs, handles;
-	int err = 0;
+	int err = 0, perfErr = 0;
 
 	inbufs = REMOTE_SCALARS_INBUFS(sc);
 	outbufs = REMOTE_SCALARS_OUTBUFS(sc);
@@ -2973,9 +2979,12 @@ static int put_args(uint32_t kernel, struct smq_invoke_ctx *ctx,
 	if (ctx->crc && crclist && rpra)
 		K_COPY_TO_USER(err, kernel, ctx->crc,
 			crclist, M_CRCLIST*sizeof(uint32_t));
-	if (ctx->perf_dsp && perf_dsp_list)
-		K_COPY_TO_USER_WITHOUT_ERR(kernel, ctx->perf_dsp,
+	if (ctx->perf_dsp && perf_dsp_list) {
+		K_COPY_TO_USER(perfErr, kernel, ctx->perf_dsp,
 			perf_dsp_list, M_DSP_PERF_LIST*sizeof(uint64_t));
+		if (perfErr)
+			ADSPRPC_WARN("failed to copy perf data err %d\n", perfErr);
+	}
 
  bail:
 	return err;
@@ -3349,7 +3358,7 @@ static int fastrpc_internal_invoke(struct fastrpc_file *fl, uint32_t mode,
 {
 	struct smq_invoke_ctx *ctx = NULL;
 	struct fastrpc_ioctl_invoke *invoke = &inv->inv;
-	int err = 0, interrupted = 0, cid = -1;
+	int err = 0, interrupted = 0, cid = -1, perfErr = 0;
 	struct timespec64 invoket = {0};
 	uint64_t *perf_counter = NULL;
 	bool isasyncinvoke = false, isworkdone = false;
@@ -3480,9 +3489,12 @@ static int fastrpc_internal_invoke(struct fastrpc_file *fl, uint32_t mode,
 			ctx->perf->copy, ctx->perf->link, ctx->perf->getargs,
 			ctx->perf->putargs, ctx->perf->invargs,
 			ctx->perf->invoke, ctx->perf->tid);
-			if (ctx->perf_kernel)
-				K_COPY_TO_USER_WITHOUT_ERR(kernel, ctx->perf_kernel,
+			if (ctx->perf_kernel) {
+				K_COPY_TO_USER(perfErr, kernel, ctx->perf_kernel,
 				ctx->perf, M_KERNEL_PERF_LIST*sizeof(uint64_t));
+				if (perfErr)
+					ADSPRPC_WARN("failed to copy perf data err %d\n", perfErr);
+			}
 		}
 		context_free(ctx);
 		trace_fastrpc_msg("context_free: end");
@@ -3502,7 +3514,7 @@ static int fastrpc_wait_on_async_queue(
 			struct fastrpc_ioctl_async_response *async_res,
 			struct fastrpc_file *fl)
 {
-	int err = 0, ierr = 0, interrupted = 0;
+	int err = 0, ierr = 0, interrupted = 0, perfErr = 0;
 	struct smq_invoke_ctx *ctx = NULL, *ictx = NULL, *n = NULL;
 	unsigned long flags;
 	uint64_t *perf_counter = NULL;
@@ -3570,9 +3582,12 @@ bail:
 			ctx->perf->copy, ctx->perf->link, ctx->perf->getargs,
 			ctx->perf->putargs, ctx->perf->invargs,
 			ctx->perf->invoke, ctx->perf->tid);
-			if (ctx->perf_kernel)
-				K_COPY_TO_USER_WITHOUT_ERR(0, ctx->perf_kernel,
+			if (ctx->perf_kernel) {
+				K_COPY_TO_USER(perfErr, 0, ctx->perf_kernel,
 				ctx->perf, M_KERNEL_PERF_LIST*sizeof(uint64_t));
+				if (perfErr)
+					ADSPRPC_WARN("failed to copy perf data err %d\n", perfErr);
+			}
 		}
 		context_free(ctx);
 	}
@@ -3861,6 +3876,12 @@ static int fastrpc_init_attach_process(struct fastrpc_file *fl,
 	remote_arg_t ra[1];
 	struct fastrpc_ioctl_invoke_async ioctl;
 
+	if (fl->dev_minor == MINOR_NUM_DEV) {
+		err = -ECONNREFUSED;
+		ADSPRPC_ERR(
+			"untrusted app trying to attach to privileged DSP PD\n");
+		return err;
+	}
 	/*
 	 * Prepare remote arguments for creating thread group
 	 * in guestOS/staticPD on the remote subsystem.
@@ -4138,6 +4159,13 @@ static int fastrpc_init_create_static_process(struct fastrpc_file *fl,
 		unsigned int namelen;
 		unsigned int pageslen;
 	} inbuf;
+
+	if (fl->dev_minor == MINOR_NUM_DEV) {
+		err = -ECONNREFUSED;
+		ADSPRPC_ERR(
+			"untrusted app trying to attach to audio PD\n");
+		return err;
+	}
 
 	if (!init->filelen)
 		goto bail;
@@ -7008,6 +7036,8 @@ static int fastrpc_restart_notifier_cb(struct notifier_block *nb,
 	cid = ctx - &me->channel[0];
 	switch (code) {
 	case QCOM_SSR_BEFORE_SHUTDOWN:
+		trace_rproc_qcom_event(gcinfo[cid].subsys,
+			"QCOM_SSR_BEFORE_SHUTDOWN", "fastrpc_restart_notifier-enter");
 		pr_info("adsprpc: %s: %s subsystem is restarting\n",
 			__func__, gcinfo[cid].subsys);
 		mutex_lock(&me->channel[cid].smd_mutex);
@@ -7018,6 +7048,8 @@ static int fastrpc_restart_notifier_cb(struct notifier_block *nb,
 			me->staticpd_flags = 0;
 		break;
 	case QCOM_SSR_AFTER_SHUTDOWN:
+		trace_rproc_qcom_event(gcinfo[cid].subsys,
+			"QCOM_SSR_AFTER_SHUTDOWN", "fastrpc_restart_notifier-enter");
 		if (cid == RH_CID) {
 			if (me->ramdump_handle)
 				me->channel[RH_CID].ramdumpenabled = 1;
@@ -7026,6 +7058,8 @@ static int fastrpc_restart_notifier_cb(struct notifier_block *nb,
 			__func__, gcinfo[cid].subsys);
 		break;
 	case QCOM_SSR_BEFORE_POWERUP:
+		trace_rproc_qcom_event(gcinfo[cid].subsys,
+			"QCOM_SSR_BEFORE_POWERUP", "fastrpc_restart_notifier-enter");
 		if (cid == RH_CID && dump_enabled()) {
 			if (me->ramdump_handle && me->channel[RH_CID]
 					.ramdumpenabled) {
@@ -7044,6 +7078,8 @@ static int fastrpc_restart_notifier_cb(struct notifier_block *nb,
 		fastrpc_notify_drivers(me, cid);
 		break;
 	case QCOM_SSR_AFTER_POWERUP:
+		trace_rproc_qcom_event(gcinfo[cid].subsys,
+			"QCOM_SSR_AFTER_POWERUP", "fastrpc_restart_notifier-enter");
 		pr_info("adsprpc: %s: %s subsystem is up\n",
 			__func__, gcinfo[cid].subsys);
 		ctx->issubsystemup = 1;
@@ -7051,6 +7087,8 @@ static int fastrpc_restart_notifier_cb(struct notifier_block *nb,
 	default:
 		break;
 	}
+
+	trace_rproc_qcom_event(dev_name(me->dev), "fastrpc_restart_notifier", "exit");
 	return NOTIFY_DONE;
 }
 
@@ -7590,17 +7628,20 @@ long fastrpc_driver_invoke(struct fastrpc_device *dev, unsigned int invoke_num,
 		spin_unlock(&fl->hlock);
 		spin_unlock_irqrestore(&me->hlock, irq_flags);
 		mutex_lock(&fl->internal_map_mutex);
-
+		mutex_lock(&fl->map_mutex);
 		if (!fastrpc_mmap_find(fl, -1, p.unmap->buf, 0, 0, ADSP_MMAP_DMA_BUFFER, 0, &map)) {
 			/* Un-map DMA buffer on DSP*/
+			mutex_unlock(&fl->map_mutex);
 			VERIFY(err, !(err = fastrpc_munmap_on_dsp(fl, map->raddr,
 				map->phys, map->size, map->flags)));
 			if (err) {
 				mutex_unlock(&fl->internal_map_mutex);
 				break;
 			}
+			mutex_lock(&fl->map_mutex);
 			fastrpc_mmap_free(map, 0);
 		}
+		mutex_unlock(&fl->map_mutex);
 		mutex_unlock(&fl->internal_map_mutex);
 		break;
 	default:

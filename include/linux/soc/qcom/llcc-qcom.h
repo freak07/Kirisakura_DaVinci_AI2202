@@ -1,7 +1,7 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/platform_device.h>
@@ -40,14 +40,20 @@
 #define LLCC_CPUHWT      36
 #define LLCC_MDMCLAD2    37
 #define LLCC_CAMEXP1     38
+#define LLCC_LCPDARE     40
 #define LLCC_AENPU       45
-#define LLCC_VIEYE       46
-#define LLCC_VIDPTH      47
-#define LLCC_GPUMV       48
-#define LLCC_EVALFT      49
-#define LLCC_EVARGHT     50
-#define LLCC_EVAGAIN     51
-#define LLCC_VIPTH       55
+#define LLCC_VIEYE       57
+#define LLCC_VIDPTH      58
+#define LLCC_GPUMV       59
+#define LLCC_EVALFT      60
+#define LLCC_EVARGHT     61
+#define LLCC_EVAGAIN     62
+#define LLCC_VIPTH       63
+#define LLCC_DISLFT      65
+#define LLCC_DISRGHT     66
+#define LLCC_EVCSLFT     67
+#define LLCC_EVCSRGHT    68
+#define LLCC_SPAD        69
 
 /**
  * llcc_slice_desc - Cache slice descriptor
@@ -115,6 +121,8 @@ struct llcc_drv_data {
 	int llcc_ver;
 	bool cap_based_alloc_and_pwr_collapse;
 	struct llcc_slice_desc *desc;
+	struct regmap *spad_or_bcast_regmap;
+	struct regmap *spad_and_bcast_regmap;
 };
 
 #if IS_ENABLED(CONFIG_QCOM_LLCC)
