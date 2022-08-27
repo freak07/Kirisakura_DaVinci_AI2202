@@ -548,6 +548,8 @@ static const __initconst char * const blacklist[] = {
 	// Redundant modules
 	"qca6750",
 	"kiwi",
+	"msm_mmrm",
+	"msm_drm",
 	"wcd937x_dlkm",
 	"wcd937x_slave_dlkm",
 	"llcc_perfmon",

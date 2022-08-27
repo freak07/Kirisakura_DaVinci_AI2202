@@ -2270,7 +2270,7 @@ static void __exit msm_drm_unregister(void)
 	platform_driver_unregister(&msm_platform_driver);
 }
 
-module_init(msm_drm_register);
+late_initcall(msm_drm_register);
 module_exit(msm_drm_unregister);
 
 #if IS_ENABLED(CONFIG_MSM_MMRM)
