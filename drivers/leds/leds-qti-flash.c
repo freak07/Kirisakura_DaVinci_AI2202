@@ -24,6 +24,10 @@
 
 #include "leds.h"
 
+#ifdef CONFIG_UCI
+#include <linux/uci/uci.h>
+#endif
+
 #define FLASH_LED_REVISION1			0x00
 
 #define FLASH_LED_PERIPH_SUBTYPE		0x05
@@ -433,6 +437,9 @@ static int qti_flash_led_enable(struct flash_node_data *fnode)
 	int rc;
 	u8 val, addr_offset;
 
+#ifdef CONFIG_UCI
+        pr_debug("%s called.\n",__func__);
+#endif
 	addr_offset = fnode->id;
 
 	spin_lock(&led->lock);
@@ -481,6 +488,9 @@ static int qti_flash_led_disable(struct flash_node_data *fnode)
 	struct qti_flash_led *led = fnode->led;
 	int rc;
 
+#ifdef CONFIG_UCI
+        pr_debug("%s called.\n",__func__);
+#endif
 	if (!fnode->configured) {
 		pr_debug("%s is not configured\n", fnode->fdev.led_cdev.name);
 		return 0;
@@ -657,6 +667,9 @@ static void qti_flash_led_brightness_set(struct led_classdev *led_cdev,
 	struct qti_flash_led *led;
 	int i, rc;
 
+#ifdef CONFIG_UCI
+        pr_debug("%s called.\n",__func__);
+#endif
 	fdev = container_of(led_cdev, struct led_classdev_flash, led_cdev);
 	fnode = container_of(fdev, struct flash_node_data, fdev);
 	led = fnode->led;
@@ -690,6 +703,9 @@ static int qti_flash_switch_enable(struct flash_switch_data *snode)
 	enum flash_led_type type = FLASH_LED_TYPE_UNKNOWN;
 	u8 led_en = 0;
 
+#ifdef CONFIG_UCI
+        pr_debug("%s called.\n",__func__);
+#endif
 	/* If symmetry enabled switch, then turn ON all its LEDs */
 	if (snode->symmetry_en) {
 		rc = qti_flash_led_symmetry_config(snode);
@@ -745,6 +761,9 @@ static int qti_flash_switch_disable(struct flash_switch_data *snode)
 	int rc = 0, i;
 	u8 led_dis = 0;
 
+#ifdef CONFIG_UCI
+        pr_debug("%s called.\n",__func__);
+#endif
 	for (i = 0; i < led->num_fnodes; i++) {
 		if (!(snode->led_mask & BIT(led->fnode[i].id)) ||
 				!led->fnode[i].configured)
@@ -791,6 +810,9 @@ static void qti_flash_led_switch_brightness_set(
 	int rc = 0;
 	bool state = value > 0;
 
+#ifdef CONFIG_UCI
+        pr_debug("%s called. name: %s value: %d\n",__func__, led_cdev->name, value);
+#endif
 	snode = container_of(led_cdev, struct flash_switch_data, cdev);
 
 	if (snode->enabled == state) {
@@ -820,6 +842,26 @@ static void qti_flash_led_switch_brightness_set(
 	else
 		snode->enabled = state;
 }
+
+#ifdef CONFIG_UCI
+static struct led_classdev *g_cdev = NULL;
+static struct led_classdev *g_cdev_led_0 = NULL;
+static struct led_classdev *g_cdev_led_1 = NULL;
+// torch
+void qpnp_torch_main(int led0, int led1) {
+	if (g_cdev!=NULL && g_cdev_led_0!=NULL && g_cdev_led_1!=NULL) {
+		// needs to be called always first
+		qti_flash_led_switch_brightness_set(g_cdev, 0);
+		if (led0>0) {
+			// set before switch...
+			qti_flash_led_brightness_set(g_cdev_led_0, 150);
+			// needs to be called after led brightness was set...
+			qti_flash_led_switch_brightness_set(g_cdev, 1);
+		}
+	}
+}
+EXPORT_SYMBOL(qpnp_torch_main);
+#endif
 
 static struct led_classdev *trigger_to_lcdev(struct led_trigger *trig)
 {
@@ -1519,6 +1561,10 @@ static int register_switch_device(struct qti_flash_led *led,
 			goto sysfs_fail;
 		}
 	}
+#ifdef CONFIG_UCI
+	pr_info("%s register g_cdev name: %s\n",__func__,snode->cdev.name);
+	g_cdev = &snode->cdev;
+#endif
 
 	return 0;
 
@@ -1667,6 +1713,15 @@ static int register_flash_device(struct qti_flash_led *led,
 	setting->val = SAFETY_TIMER_DEFAULT_TIMEOUT_MS * 1000;
 
 	rc = led_classdev_flash_register(&led->pdev->dev, &fnode->fdev);
+#ifdef CONFIG_UCI
+	pr_info("%s register g_cdev_led_flash name: %s\n",__func__,fnode->fdev.led_cdev.name);
+	if (strstr(fnode->fdev.led_cdev.name,"torch_0")) {
+		g_cdev_led_0 = &fnode->fdev.led_cdev;
+	}
+	if (strstr(fnode->fdev.led_cdev.name,"torch_3")) {
+		g_cdev_led_1 = &fnode->fdev.led_cdev;
+	}
+#endif
 	if (rc < 0) {
 		pr_err("Failed to register flash led device:%s\n",
 			fnode->fdev.led_cdev.name);
@@ -1821,6 +1876,16 @@ unreg_led:
 	return rc;
 }
 
+#ifdef CONFIG_UCI
+static void uci_call_handler(char* event, int num_param[], char* str_param) {
+        pr_info("%s call handler torch event %s %d %s\n",__func__,event,num_param[0],str_param);
+        if (!strcmp(event,"torch_main")) {
+		qpnp_torch_main(num_param[0],num_param[1]);
+        }
+}
+#endif
+
+
 static int qti_flash_led_probe(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
@@ -1865,7 +1930,9 @@ static int qti_flash_led_probe(struct platform_device *pdev)
 	}
 
 	dev_set_drvdata(&pdev->dev, led);
-
+#ifdef CONFIG_UCI
+	uci_add_call_handler(uci_call_handler);
+#endif
 	return 0;
 }
 
