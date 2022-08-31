@@ -1159,6 +1159,10 @@ static int haptics_set_vmax_mv(struct haptics_chip *chip, u32 vmax_mv)
 		return -EINVAL;
 	}
 
+#ifdef CONFIG_UCI
+	pr_info("%s haptics %d \n",__func__, vmax_mv);
+#endif
+
 	if (chip->clamp_at_5v && (vmax_mv > CLAMPED_VMAX_MV))
 		vmax_mv = CLAMPED_VMAX_MV;
 
@@ -1469,6 +1473,9 @@ static int haptics_enable_play(struct haptics_chip *chip, bool en)
 	int rc;
 	u8 val;
 
+#ifdef CONFIG_UCI
+	pr_info("%s haptics en: %d \n",__func__,en?1:0);
+#endif
 	if (en) {
 		val = SC_CLR_BIT | AUTO_RES_ERR_CLR_BIT |
 			HPWR_RDY_FAULT_CLR_BIT;
@@ -1555,6 +1562,10 @@ static int haptics_set_pattern(struct haptics_chip *chip,
 		dev_err(chip->dev, "no pattern src specified!\n");
 		return -EINVAL;
 	}
+
+#ifdef CONFIG_UCI
+	pr_info("%s haptics pattern: %d \n",__func__, src);
+#endif
 
 	ptn_tlra_addr = HAP_PTN_PTRN1_TLRA_MSB_REG;
 	ptn_cfg_addr = HAP_PTN_PTRN1_CFG_REG;
@@ -2184,6 +2195,10 @@ static int haptics_load_custom_effect(struct haptics_chip *chip,
 	if (copy_from_user(&custom_data, data, sizeof(custom_data)))
 		return -EFAULT;
 
+#ifdef CONFIG_UCI
+	pr_info("%s haptics: %d \n",__func__, length);
+#endif
+
 	dev_dbg(chip->dev, "custom data length %d with play-rate %d Hz\n",
 			custom_data.length, custom_data.play_rate_hz);
 	printk("haptic_d: %s: custom data length %d with play-rate %d Hz\n",
@@ -2299,6 +2314,10 @@ static int haptics_load_periodic_effect(struct haptics_chip *chip,
 				custom_data[CUSTOM_DATA_EFFECT_IDX]);
 		return -EINVAL;
 	}
+
+#ifdef CONFIG_UCI
+	pr_info("%s haptics: %d \n",__func__, length);
+#endif
 
 	mutex_lock(&chip->play.lock);
 
@@ -3407,6 +3426,10 @@ static ssize_t short_vibrate_write(struct file *fp,
 		goto exit;
 	}
 
+#ifdef CONFIG_UCI
+	pr_info("%s haptics \n",__func__);
+#endif
+
 	kbuf[count] = '\0';
 	*ppos += count;
 	printk("[vibrator] %s chip->ptn_revision=%d\n",__func__,chip->ptn_revision);
@@ -3517,6 +3540,10 @@ static ssize_t long_vibrate_write(struct file *fp,
 		rc = -EFAULT;
 		goto exit;
 	}
+
+#ifdef CONFIG_UCI
+	pr_info("%s haptics \n",__func__);
+#endif
 
 	kbuf[count] = '\0';
 	*ppos += count;
@@ -3646,6 +3673,10 @@ static ssize_t stop_vibrate_write(struct file *fp,
 		rc = -EFAULT;
 		goto exit;
 	}
+
+#ifdef CONFIG_UCI
+	pr_info("%s haptics \n",__func__);
+#endif
 
 	kbuf[count] = '\0';
 	*ppos += count;
