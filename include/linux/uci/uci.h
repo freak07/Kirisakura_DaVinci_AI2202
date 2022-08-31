@@ -111,4 +111,7 @@ extern void uci_set_current_ssid(const char *name);
 /** add call handler to handle kernel initiated functionalities like flashing, vibration... register your drivers with this function */
 extern void uci_add_call_handler(void (*f)(char* event, int num_params[], char* str_param));
 
+/** for display drivers to set screen state **/
+extern void uci_screen_state(int state);
+
 #endif /* __UCI_H__ */
