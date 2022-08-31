@@ -26,16 +26,17 @@
 // ... or input will not work till screen off/on
 #define FILTER_ONLY_AFTER_SOME_TOUCH_EVENTS
 
+#define COORD_DIV_NEEDED
 
 //sweep2sleep
 #define S2S_PWRKEY_DUR         20
 
 #if 1
-// 3120x1440 P6PRO
-static int S2S_Y_MAX = 3120;
-static int S2S_X_MAX = 1440;
-static int S2S_X_LEFT_CORNER_END = 150;
-static int S2S_X_RIGHT_CORNER_START = 1290; // 1080-110
+// 2400x1080 zf8
+static int S2S_Y_MAX = 2400;
+static int S2S_X_MAX = 1080;
+static int S2S_X_LEFT_CORNER_END = 110;
+static int S2S_X_RIGHT_CORNER_START = 970; // 1080-110
 
 #elif 1
 // 3168x1440 // oneplus 8 pro
@@ -167,10 +168,6 @@ static void s2s_setup_values() {
 		// leave original values
 	} else {
                 pr_info("%s hw ?\n",__func__);
-		S2S_Y_MAX = 2400;
-		S2S_X_MAX = 1080;
-		S2S_X_LEFT_CORNER_END = 100;
-		S2S_X_RIGHT_CORNER_START = 1080-100;
 	}
 }
 
@@ -586,7 +583,7 @@ static unsigned long last_outside_area_touch_time = 0;
 
 bool s2s_freeze_coords(int *x, int *y, int r_x2, int r_y2) {
 #ifdef COORD_DIV_NEEDED
-// zf8
+// zf8 / zf9
 	int r_x = r_x2/16;
 	int r_y = r_y2/16;
 #else
