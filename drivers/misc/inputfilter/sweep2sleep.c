@@ -24,7 +24,9 @@
 #define FULL_FILTER
 // full filtering on certain devices needs to NOT filter the first touch event, even in the filtering area we must let it through,
 // ... or input will not work till screen off/on
-#define FILTER_ONLY_AFTER_SOME_TOUCH_EVENTS
+// used so far: p6pro only
+// not needed: zf8, zf9...
+//#define FILTER_ONLY_AFTER_SOME_TOUCH_EVENTS
 
 #define COORD_DIV_NEEDED
 
