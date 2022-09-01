@@ -26,6 +26,17 @@
 #include <linux/uaccess.h>
 #include <linux/qpnp/qpnp-pbs.h>
 
+#ifdef CONFIG_UCI
+#include <linux/uci/uci.h>
+#include <linux/notification/notification.h>
+struct haptics_chip *g_chip = NULL;
+static int booster_percentage = 0;
+static bool booster_in_pocket = false;
+
+static int haptic_percentage = 0;
+
+#endif /* CONFIG_UCI */
+
 /* status register definitions in HAPTICS_CFG module */
 #define HAP_CFG_REVISION2_REG			0x01
 #define HAP_CFG_V1				0x1
@@ -2302,6 +2313,9 @@ static int haptics_load_periodic_effect(struct haptics_chip *chip,
 	if (chip->effects_count == 0)
 		return -EINVAL;
 
+#ifdef CONFIG_UCI
+    if (data != NULL) {
+#endif
 	if (copy_from_user(custom_data, data, sizeof(custom_data)))
 		return -EFAULT;
 
@@ -2314,9 +2328,15 @@ static int haptics_load_periodic_effect(struct haptics_chip *chip,
 				custom_data[CUSTOM_DATA_EFFECT_IDX]);
 		return -EINVAL;
 	}
+#ifdef CONFIG_UCI
+    } else {
+		// set effect to 0
+		i = 0;
+    }
+#endif
 
 #ifdef CONFIG_UCI
-	pr_info("%s haptics: %d \n",__func__, length);
+	pr_info("%s haptics: %d \n",__func__, magnitude);
 #endif
 
 	mutex_lock(&chip->play.lock);
@@ -2344,9 +2364,14 @@ static int haptics_load_periodic_effect(struct haptics_chip *chip,
 		play->length_us / USEC_PER_SEC;
 	custom_data[CUSTOM_DATA_TIMEOUT_MSEC_IDX] =
 		(play->length_us % USEC_PER_SEC) / USEC_PER_MSEC;
-
+#ifdef CONFIG_UCI
+    if (data != NULL) {
+#endif
 	if (copy_to_user(data, custom_data, length))
 		return -EFAULT;
+#ifdef CONFIG_UCI
+    }
+#endif
 
 	return 0;
 unlock:
@@ -4965,6 +4990,146 @@ static enum hrtimer_restart haptics_disable_hbst_timer(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
+#ifdef CONFIG_UCI
+
+static int vib_func_num = 0;
+static int vib_func_boost_level = 0;
+static bool vib_func_start = 0;
+static bool vib_func_stop = 0;
+static bool vib_func_params_read = true;
+static int vib_func_pause_length = 0;
+
+static struct workqueue_struct *vib_func_wq;
+
+
+static void uci_vib(bool on) {
+	    haptics_enable_play(g_chip,on?1:0);
+}
+
+static int uci_vib_set_mode(bool long_mode) {
+	int rc = 0;
+
+	if (g_chip==NULL) return -1;
+	if (!long_mode) {
+		haptics_load_periodic_effect(g_chip, NULL, 0, 32767);
+	} else {
+		g_chip->config.t_lra_us = 4878;
+		haptics_config_openloop_lra_period(g_chip, g_chip->config.t_lra_us);
+		haptics_load_constant_effect(g_chip,DIRECT_PLAY_MAX_AMPLITUDE);
+	}
+	return rc;
+}
+static void uci_vib_set_scale(int scale) {
+
+}
+
+static void uci_vibrate_func(struct work_struct * uci_vibrate_func_work)
+{
+
+    int num = vib_func_num;
+    int boost_level = vib_func_boost_level;
+    bool start = vib_func_start;
+    bool stop = vib_func_stop;
+    int pause = vib_func_pause_length;
+
+    int scale = 90 - boost_level;
+    bool long_mode = (num >= 50);
+
+    pr_info("%s enter\n",__func__);
+    pr_info("%s inside vib func, params read -- num: %d boost %d start %u stop %u pause %d \n",__func__, num, boost_level,start,stop,pause);
+    vib_func_params_read = true;
+
+    if (g_chip == NULL) return;
+
+    if (scale < 1) scale = 1;
+
+    uci_vib_set_mode(long_mode);
+    uci_vib_set_scale(scale);
+
+    if (start) {
+		uci_vib(true);
+    }
+    if (start && stop) {
+        if (num<50) mdelay(50);
+            else mdelay(num); // cannot sleep, as this can be in atomic context as well
+    }
+
+    if (stop) {
+// stop
+		uci_vib(false);
+    }
+
+    if (start && stop && pause>0) {
+	    mdelay(pause);
+            uci_vib(true);
+            mdelay(num);
+	    uci_vib(false);
+    }
+
+    pr_info("%s exit\n",__func__);
+
+}
+static DECLARE_WORK(uci_vibrate_func_work, uci_vibrate_func);
+
+static DEFINE_MUTEX(vib_int);
+
+void set_vibrate_int(int num, int boost_level, bool start, bool stop, int pause_length) {
+
+#if 1
+	int count = 30;
+	pr_debug("%s enter\n",__func__);
+	mutex_lock(&vib_int);
+	{
+	pr_debug("%s scheduling vib func, setting up params...\n",__func__);
+	while (!vib_func_params_read) {
+		mdelay(10);
+		count--;
+		if (count<=0) break;
+	}
+
+	// this is to set up params, and make sure they are read by the work (TODO use INIT_WORK instead)...
+	vib_func_params_read = false;
+	vib_func_num = num;
+	vib_func_boost_level = boost_level;
+	vib_func_start = start;
+	vib_func_stop = stop;
+	vib_func_pause_length = pause_length;
+	pr_info("%s scheduling vib func, params set, schedule! num: %d boost %d start %u stop %u pause_length %d\n",__func__, num, boost_level,start,stop, pause_length);
+	queue_work(vib_func_wq,&uci_vibrate_func_work);
+	mutex_unlock(&vib_int);
+	}
+#endif
+	pr_info("%s exit\n",__func__);
+}
+
+
+static void uci_call_handler(char* event, int num_param[], char* str_param) {
+        pr_info("%s vibrate event %s %d %s\n",__func__,event,num_param[0],str_param);
+        if (g_chip) {
+
+            if (!strcmp(event,"vibrate_boosted")) {
+                set_vibrate_int(num_param[0],80,true,true,0);
+	    } else
+	    if (!strcmp(event,"vibrate")) {
+                set_vibrate_int(num_param[0],48,true,true,0);
+            } else
+	    if (!strcmp(event,"vibrate_2")) {
+	        pr_info("%s vibrate_2 %d %d %s\n",__func__,num_param[0],num_param[1],str_param);
+                set_vibrate_int(num_param[0],num_param[1],true,true,0);
+	    };
+	}
+        if (!strcmp(event,"vibration_set_haptic")) {
+            haptic_percentage = num_param[0];
+	} else
+        if (!strcmp(event,"vibration_set_in_pocket")) {
+            booster_percentage = num_param[0];
+            booster_in_pocket = num_param[1];
+            pr_info("%s vibrate event %s perc: %d pocketed: %d\n",__func__,event,num_param[0],num_param[1]);
+        }
+
+}
+#endif /* UCI */
+
 static int haptics_probe(struct platform_device *pdev)
 {
 	struct haptics_chip *chip;
@@ -5081,6 +5246,14 @@ static int haptics_probe(struct platform_device *pdev)
 #endif
 
 	printk("haptic_d: probe complete\n");
+
+#ifdef CONFIG_UCI
+	g_chip = chip;
+	uci_add_call_handler(uci_call_handler);
+	vib_func_wq = alloc_workqueue("vib_func_wq",
+		WQ_HIGHPRI | WQ_MEM_RECLAIM, 1);
+#endif
+
 
 	return 0;
 destroy_ff:
