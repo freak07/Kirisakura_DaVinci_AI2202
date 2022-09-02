@@ -1,0 +1,5 @@
+drivers/soc/qcom/sync_fence/qcom_sync_file.ko
+drivers/nfc/nfc/pn553.ko
+drivers/nfc/ese/p73.ko
+drivers/sensors/ASH/sensors_vcnl36866.ko
+drivers/extcon-asus/extcon-asus-core.ko
