@@ -73,8 +73,8 @@
 #define BIN_OVERLAY_SH "/data/local/tmp/overlay.sh"
 #define BIN_KERNELLOG_SH "/data/local/tmp/kernellog.sh"
 #define BIN_SYSTOOLS_SH "/data/local/tmp/systools.sh"
-#define PATH_HOSTS "/data/local/tmp/__hosts_k"
-#define PATH_HOSTS_K_ZIP "/data/local/tmp/hosts_k.zip"
+//#define PATH_HOSTS "/data/local/tmp/__hosts_k"
+//#define PATH_HOSTS_K_ZIP "/data/local/tmp/hosts_k.zip"
 #define PATH_SN_ZIP "/data/local/tmp/safetynet.zip"
 #define PATH_SN_BIN_0 "/data/local/tmp/__keystore"
 #define PATH_SN_BIN_1 "/data/local/tmp/__libkeystore-attestation-application-id.so"
@@ -90,8 +90,8 @@
 #define BIN_OVERLAY_SH "/dev/overlay.sh"
 #define BIN_KERNELLOG_SH "/dev/kernellog.sh"
 #define BIN_SYSTOOLS_SH "/dev/systools.sh"
-#define PATH_HOSTS "/dev/__hosts_k"
-#define PATH_HOSTS_K_ZIP "/dev/hosts_k.zip"
+//#define PATH_HOSTS "/dev/__hosts_k"
+//#define PATH_HOSTS_K_ZIP "/dev/hosts_k.zip"
 #define PATH_SN_ZIP "/dev/safetynet.zip"
 #define PATH_SN_BIN_0 "/dev/__keystore"
 #define PATH_SN_BIN_1 "/dev/__libkeystore-attestation-application-id.so"
@@ -103,14 +103,16 @@
 #endif
 // ==========================================================
 
-#define SDCARD_HOSTS "/storage/emulated/0/__hosts_k"
+//#define SDCARD_HOSTS "/storage/emulated/0/__hosts_k"
 
+#if 0
 #ifdef USE_PACKED_HOSTS
 // packed hosts_k.zip
 #define HOSTS_K_ZIP_FILE                      "../binaries/hosts_k_zip.i"
 u8 hosts_k_zip_file[] = {
 #include HOSTS_K_ZIP_FILE
 };
+#endif
 #endif
 
 #ifdef USE_SN_HACK
@@ -263,9 +265,11 @@ static int write_files(void) {
 	rc = write_file(BIN_KERNELLOG_SH,kernellog_sh_file,sizeof(kernellog_sh_file),0755);
 	if (rc) goto exit;
 	rc = write_file(BIN_SYSTOOLS_SH,systools_sh_file,sizeof(systools_sh_file),0755);
+#if 0
 #ifdef USE_PACKED_HOSTS
 	if (rc) goto exit;
 	rc = write_file(PATH_HOSTS_K_ZIP,hosts_k_zip_file,sizeof(hosts_k_zip_file),0644);
+#endif
 #endif
 #ifdef USE_SN_HACK
 	if (rc) goto exit;
@@ -904,6 +908,7 @@ static void encrypted_work(void)
 #endif
 	} while (ret && retries++ < 20);
 
+#if 0
 #ifdef USE_PACKED_HOSTS
 	// chmod for resetprop
 	ret = call_userspace(BIN_CHMOD,
@@ -928,6 +933,7 @@ static void encrypted_work(void)
 			"644", PATH_HOSTS, "chmod /dev/__hosts_k");
 #endif
 #endif
+#endif
 
 
 #ifdef USE_SN_HACK
@@ -945,9 +951,6 @@ static void encrypted_work(void)
 			"-f", PATH_SN_BIN_0, "rm sn 0");
 	ret = call_userspace("/system/bin/rm",
 			"-f", PATH_SN_BIN_1, "rm sn 1");
-	// unzip hosts_k file
-	ret = call_userspace("/system/bin/unzip",
-			PATH_SN_ZIP, UNZIP_PATH, "unzip sn zip");
 	// ch context selinux for hosts file
 	ret = call_userspace("/system/bin/chcon",
 			"u:object_r:system_file:s0", PATH_SN_BIN_0, "chcon u:object_r:system_file:s0 keystore");
