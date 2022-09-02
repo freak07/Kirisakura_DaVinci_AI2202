@@ -130,6 +130,7 @@ struct msm_hsphy {
 
 	struct clk		*ref_clk_src;
 	struct clk		*cfg_ahb_clk;
+	struct clk		*ref_clk;
 	struct reset_control	*phy_reset;
 
 	struct regulator	*vdd;
@@ -181,6 +182,9 @@ static void msm_hsphy_enable_clocks(struct msm_hsphy *phy, bool on)
 	if (!phy->clocks_enabled && on) {
 		clk_prepare_enable(phy->ref_clk_src);
 
+		if (phy->ref_clk)
+			clk_prepare_enable(phy->ref_clk);
+
 		if (phy->cfg_ahb_clk)
 			clk_prepare_enable(phy->cfg_ahb_clk);
 
@@ -188,6 +192,10 @@ static void msm_hsphy_enable_clocks(struct msm_hsphy *phy, bool on)
 	}
 
 	if (phy->clocks_enabled && !on) {
+
+		if (phy->ref_clk)
+			clk_disable_unprepare(phy->ref_clk);
+
 		if (phy->cfg_ahb_clk)
 			clk_disable_unprepare(phy->cfg_ahb_clk);
 
@@ -535,7 +543,15 @@ static int msm_hsphy_set_suspend(struct usb_phy *uphy, int suspend)
 
 suspend:
 	if (suspend) { /* Bus suspend */
-		if (phy->cable_connected) {
+		/*
+		 * The HUB class drivers calls usb_phy_notify_disconnect() upon a device
+		 * disconnect. Consider a scenario where a USB device is disconnected without
+		 * detaching the OTG cable. phy->cable_connected is marked false due to above
+		 * mentioned call path. Now, while entering low power mode (host bus suspend),
+		 * we come here and turn off regulators thinking no cable is connected. Prevent
+		 * this by not turning off regulators while in host mode.
+		 */
+		if (phy->cable_connected || (phy->phy.flags & PHY_HOST_MODE)) {
 			/* Enable auto-resume functionality during host mode
 			 * bus suspend with some FS/HS peripheral connected.
 			 */
@@ -1130,20 +1146,22 @@ static void msm_hsphy_port_state_work(struct work_struct *w)
 
 		status = msm_hsphy_chg_det_status(phy, STATE_DCD);
 
-		if (!status) {
+		/*
+		 * Floating or non compliant charger which pull D+ all the time
+		 * will cause DCD timeout and end up being detected as SDP. This
+		 * is an acceptable behavior compared to false negative of
+		 * slower insertion of SDP/CDP detection
+		 */
+		if (!status || phy->dcd_timeout >= CHG_DCD_TIMEOUT_MSEC) {
+			dev_dbg(phy->phy.dev, "DCD status=%d timeout=%d\n",
+							status, phy->dcd_timeout);
 			msm_hsphy_chg_det_disable_seq(phy, STATE_DCD);
 			msm_hsphy_chg_det_enable_seq(phy, STATE_PRIMARY);
 			phy->port_state = PORT_PRIMARY_IN_PROGRESS;
 			delay = CHG_PRIMARY_DET_TIME_MSEC;
-		} else if (phy->dcd_timeout < CHG_DCD_TIMEOUT_MSEC) {
+		} else {
 			delay = CHG_DCD_POLL_TIME_MSEC;
 			phy->dcd_timeout += delay;
-		} else {
-			msm_hsphy_notify_charger(phy,
-						POWER_SUPPLY_TYPE_USB_DCP);
-			msm_hsphy_chg_det_disable_seq(phy, STATE_DCD);
-			msm_hsphy_unprepare_chg_det(phy);
-			phy->port_state = PORT_CHG_DET_DONE;
 		}
 
 		break;
@@ -1172,6 +1190,7 @@ static void msm_hsphy_port_state_work(struct work_struct *w)
 			msm_hsphy_unprepare_chg_det(phy);
 			msm_hsphy_notify_charger(phy, POWER_SUPPLY_TYPE_USB);
 			msm_hsphy_notify_extcon(phy, EXTCON_USB, 1);
+			dev_info(phy->phy.dev, "Connected to SDP\n");
 			phy->port_state = PORT_CHG_DET_DONE;
 		}
 		break;
@@ -1190,10 +1209,16 @@ static void msm_hsphy_port_state_work(struct work_struct *w)
 		if (status) {
 			msm_hsphy_notify_charger(phy,
 						POWER_SUPPLY_TYPE_USB_DCP);
+			dev_info(phy->phy.dev, "Connected to DCP\n");
 		} else {
 			msm_hsphy_notify_charger(phy,
 						POWER_SUPPLY_TYPE_USB_CDP);
 			msm_hsphy_notify_extcon(phy, EXTCON_USB, 1);
+			/*
+			 * Drive a pulse on DP to ensure proper CDP detection
+			 */
+			dev_info(phy->phy.dev, "Connected to CDP, pull DP up\n");
+			usb_phy_drive_dp_pulse(&phy->phy);
 		}
 		/*
 		 * Fall through to check if cable got disconnected
@@ -1326,7 +1351,12 @@ static int msm_hsphy_probe(struct platform_device *pdev)
 		ret = PTR_ERR(phy->ref_clk_src);
 		return ret;
 	}
-
+	phy->ref_clk = devm_clk_get_optional(dev, "ref_clk");
+	if (IS_ERR(phy->ref_clk)) {
+		dev_dbg(dev, "clk get failed for ref_clk\n");
+		ret = PTR_ERR(phy->ref_clk);
+		return ret;
+	}
 	if (of_property_match_string(pdev->dev.of_node,
 				"clock-names", "cfg_ahb_clk") >= 0) {
 		phy->cfg_ahb_clk = devm_clk_get(dev, "cfg_ahb_clk");
