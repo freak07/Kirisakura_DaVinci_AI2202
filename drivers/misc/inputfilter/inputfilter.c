@@ -839,7 +839,9 @@ static void ifilter_input_event(struct input_handle *handle, unsigned int type,
 
 static int ifilter_input_dev_filter(struct input_dev *dev) {
 	pr_info("%s %s\n",__func__, dev->name);
-	if (strstr(dev->name, "uinput-fpc") || strstr(dev->name, "fpc1020") || strstr(dev->name, "gf_input") || strstr(dev->name, "uinput-goodix")) {
+	if (strstr(dev->name, "goodixfp") || strstr(dev->name, "uinput-fpc") || strstr(dev->name, "fpc1020") || strstr(dev->name, "gf_input") || strstr(dev->name, "uinput-goodix")
+		|| strstr(dev->name, "pmic_pwrkey") // power key device for fp scanners in power buttons need it!
+	) {
 		return 0;
 	} else {
 		return 1;
@@ -904,6 +906,10 @@ static int get_doubletap_wait_period(void) {
 	return uci_get_user_property_int_mm("fp_doubletap_wait_period", doubletap_wait_period, 0, 9);
 }
 
+// define IFILTER_DO_SINGLE_TAP_EVENTS if single tap on FP scanner should do things
+// -- when it's side mounted, that can be too sensitive to do things on single taps. Disable it on ZF9, commented
+//#define IFILTER_DO_SINGLE_TAP_EVENTS
+
 /* Home button work func 
 	will start with trying to lock worklock
 	then use vibrator to signal button press 'imitation'
@@ -922,7 +928,9 @@ static void ifilter_home_button_func(struct work_struct * ifilter_presspwr_work)
 	}
 	break_home_button_func_work = 0;
 	time_count_done_in_home_button_func_work = 0;
+#if 0 /* zf9 - vibration comes earlier on another key event */
 	ifilter_vib();
+#endif
 	while (!break_home_button_func_work) {
 		count_cycles++;
 		if (count_cycles > (DT_WAIT_PERIOD_BASE_VALUE + get_doubletap_wait_period())) {
@@ -936,21 +944,27 @@ static void ifilter_home_button_func(struct work_struct * ifilter_presspwr_work)
 		job_done_in_home_button_func_work = 1;
 		pr_info("ifilter %s home 1 \n",__func__);
 		if (get_ifilter_key()!=KEY_KPDOT) {
+#ifdef IFILTER_DO_SINGLE_TAP_EVENTS
 			input_event(ifilter_pwrdev, EV_KEY, get_ifilter_key(), 1);
 			input_event(ifilter_pwrdev, EV_SYN, 0, 0);
+#endif
 			msleep(1);
 			if (do_home_button_off_too_in_work_func) {
 				pr_info("ifilter %s home 0 \n",__func__);
+#ifdef IFILTER_DO_SINGLE_TAP_EVENTS
 				input_event(ifilter_pwrdev, EV_KEY, get_ifilter_key(), 0);
 				input_event(ifilter_pwrdev, EV_SYN, 0, 0);
+#endif
 				do_home_button_off_too_in_work_func = 0;
 				msleep(1);
 	//			ifilter_vib();
 			}
 		} else {
+#ifdef IFILTER_DO_SINGLE_TAP_EVENTS
 			if (do_home_button_off_too_in_work_func) {
 				write_uci_out("fp_touch");
 			}
+#endif
 		}
 	} 
 	mutex_unlock(&ifilteruncworklock);
@@ -976,7 +990,9 @@ static void ifilter_home_button_func_trigger(void) {
 			} else { 
 				powering_down_with_fingerprint_still_pressed = 0; 
 			}
+#if 0 /* zf9 - not needed, earlier key event triggers vib */
 			queue_work(ifilter_vib_wq, &ifilter_vib_work);
+#endif
 			mdelay(50); // delay a bit, so finger up can trigger input event in goofix driver before screen off suspend...causes issues with fp input events after screen wake otherwise
 			ifilter_pwrtrigger(0,0,__func__);
 			do_home_button_off_too_in_work_func = 0;
@@ -1097,7 +1113,8 @@ static enum alarmtimer_restart triple_tap_rtc_callback(struct alarm *al, ktime_t
 }
 
 
-
+static bool ifilter_pwrkey_down = false;
+static bool ifilter_pwrkey_was_up = false;
 /*
     filter will work on FP card events.
     if screen is not on it will work on powering it on when needed (except when Button released start (button press) was started while screen was still on: powering_down_with_fingerprint_still_pressed = 1)
@@ -1112,9 +1129,28 @@ static bool ifilter_input_filter(struct input_handle *handle,
                                     unsigned int type, unsigned int code,
                                     int value)
 {
-	pr_info("%s event t:%d c:%d v:%d\n",__func__,type,code,value);
+	pr_info("%s event h: %s t:%d c:%d v:%d\n",__func__, handle->dev->name, type,code,value);
 	if (type != EV_KEY)
 		return false;
+
+	if (strstr(handle->dev->name,"pwrkey")) {
+		bool was_down = ifilter_pwrkey_down;
+		ifilter_pwrkey_down = !(code == KEY_POWER && value == 0);
+		pr_info("%s setting pwrkey_down: %d\n",__func__,ifilter_pwrkey_down);
+		if (ifilter_pwrkey_down) {
+			// set timers back
+			last_fp_down = 0;
+			last_fp_short_touch = 0;
+		}
+		if (was_down != ifilter_pwrkey_down && was_down) ifilter_pwrkey_was_up = true;
+		return false; // never filter power key input dev events. Just use it to stop listening to other events while pressed
+	}
+
+	if (ifilter_pwrkey_down) return true; // filter events of the Fingerprint device, physical power button being pressed
+	if (ifilter_pwrkey_was_up) {
+		ifilter_pwrkey_was_up = false;
+		return true; // after pwr key released, first Fingerprint event has to be omitted logically, to not mix up things with false key events...
+	}
 
 	ntf_input_event(__func__,"");
 	if (screen_on_full && !screen_off_early) {
@@ -1128,14 +1164,23 @@ static bool ifilter_input_filter(struct input_handle *handle,
 
 	// if it's not on, don't filter anything...
 	if (get_ifilter_switch() == 0) {
-#if 1
+#if 0
 // op6 specific
 		if (code == KEY_HOME) return true; // do not let KEY HOME through for OP6...
 #endif
 		return false;
 	}
 
-	if (code != KEY_HOME && code != KEY_WAKEUP && code != KEY_UP && code != KEY_DOWN && code!=BTN_GAMEPAD) // avoid ?? KEY_EAST ? 305 // OP6
+#if 1 /* zf9 - asus fp sensor needs this, at first touch this event comes. do vibration, later it is too slow reaction for a good UX feedback */
+	if (screen_on_full && !screen_off_early) {
+//		if ((code == KEY_F17 || code == KEY_F19 || code == KEY_UP || code == KEY_DOWN) && value == 1) {
+		if (code == KEY_F22 && value == 1) {
+			ifilter_vib();
+		}
+	}
+#endif
+
+	if (code != KEY_HOME && code != KEY_WAKEUP && code != KEY_UP && code != KEY_DOWN && code!=BTN_GAMEPAD && code!=KEY_F17 && code!=KEY_F19) // avoid ?? KEY_EAST ? 305 // OP6
 		return false; // do not react on this code...
 
 	if (uci_fp_swipe_mode) {
@@ -1149,7 +1194,6 @@ static bool ifilter_input_filter(struct input_handle *handle,
 	if (code == KEY_WAKEUP) {
 		pr_debug("ifilter - wakeup %d %d \n",code,value);
 	}
-
 
 	if (get_ifilter_switch() == IFILTER_SWITCH_DTAP_TTAP) {
 		if (value > 0) {
@@ -1276,13 +1320,15 @@ static bool ifilter_input_filter(struct input_handle *handle,
 				// screen is on...
 				// release the fingerprint_pressed variable...
 				fingerprint_pressed = 0;
-				// if job was all finished inside the work func, we need to call the HOME = 0 release event here, as we couldn't signal to the work to do it on it's own
+				// if job was all finished inside the work func, we need to call the HOME = 0 release event here, as we couldn't signal to the work to do it on its own
 				if (job_done_in_home_button_func_work) {
+#ifdef IFILTER_DO_SINGLE_TAP_EVENTS
 						if (get_ifilter_key()!=KEY_KPDOT) {
 						pr_info("ifilter %s do key_home 0 sync as job was done, but without the possible signalling for HOME 0\n",__func__);
 						input_report_key(ifilter_pwrdev, get_ifilter_key(), 0);
-						input_sync(ifilter_pwrdev); 
+						input_sync(ifilter_pwrdev);
 						} else write_uci_out("fp_touch");
+#endif
 				} else {
 				// job is not yet finished in home button func work, let's signal it, to do the home button = 0 sync as well
 					if (screen_on) {
@@ -1300,16 +1346,30 @@ static bool ifilter_input_filter(struct input_handle *handle,
 	}
 	}
 	if (get_ifilter_switch() == 1) {
+		int key_code = KEY_HOME;
 		// simple home button mode, user space handles behavior
 		if (!screen_on) {
 			return false;
 		}
+
+		if (code == KEY_F17) { // short press
+			key_code = KEY_LEFTALT;
+		} else
+		if (code == KEY_F19) { // long press timed out
+			key_code = KEY_RIGHTALT;
+		} else
+		if (code == KEY_UP) { // up swipe
+			key_code = KEY_LEFTSHIFT;
+		} else 
+		if (code == KEY_DOWN) { // down swipe
+			key_code = KEY_F2; // SOFT LEFT
+		}
 		if (value > 0) {
-			ifilter_vib();
-			input_report_key(ifilter_pwrdev, KEY_HOME, 1);
+			//ifilter_vib(); /* zf9 this is done at earlier stage */
+			input_report_key(ifilter_pwrdev, key_code, 1);
 			input_sync(ifilter_pwrdev);
 		} else {
-			input_report_key(ifilter_pwrdev, KEY_HOME, 0);
+			input_report_key(ifilter_pwrdev, key_code, 0);
 			input_sync(ifilter_pwrdev);
 		}
 	}
@@ -3209,7 +3269,14 @@ static int __init ifilter_init(void)
 	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_POWER);
 	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_HOME);
 	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_APPSELECT);
-	
+	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_END);
+	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_UP);
+	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_DOWN);
+	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_RIGHTALT);
+	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_F2);
+	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_LEFTSHIFT);
+	input_set_capability(ifilter_pwrdev, EV_KEY, KEY_LEFTALT);
+
 	set_bit(EV_KEY, ifilter_pwrdev->evbit);
 	set_bit(KEY_HOME, ifilter_pwrdev->keybit);
 
