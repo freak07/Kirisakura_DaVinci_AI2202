@@ -910,6 +910,8 @@ static int get_doubletap_wait_period(void) {
 // -- when it's side mounted, that can be too sensitive to do things on single taps. Disable it on ZF9, commented
 //#define IFILTER_DO_SINGLE_TAP_EVENTS
 
+#define IFILTER_FILTER_ALL_KEY_EVENTS_IN_DTAP 1
+
 /* Home button work func 
 	will start with trying to lock worklock
 	then use vibrator to signal button press 'imitation'
@@ -1180,7 +1182,12 @@ static bool ifilter_input_filter(struct input_handle *handle,
 	}
 #endif
 
-	if (code != KEY_HOME && code != KEY_WAKEUP && code != KEY_UP && code != KEY_DOWN && code!=BTN_GAMEPAD && code!=KEY_F17 && code!=KEY_F19) // avoid ?? KEY_EAST ? 305 // OP6
+// KEY_F17 - single tap
+// key F18 - double tap
+// key F19 - long tap
+
+
+	if (code != KEY_HOME && code != KEY_WAKEUP && code != KEY_UP && code != KEY_DOWN && code!=BTN_GAMEPAD && code!=KEY_F17 && code!=KEY_F19 && code!=KEY_F18) // avoid ?? KEY_EAST ? 305 // OP6
 		return false; // do not react on this code...
 
 	if (uci_fp_swipe_mode) {
@@ -1297,9 +1304,33 @@ static bool ifilter_input_filter(struct input_handle *handle,
 #endif
 	} else if (get_ifilter_switch() == IFILTER_SWITCH_DTAP) {
 	//standalone kernel mode. double tap means switch off
+
+#if 1 /* zf9 */
+// ZF9 double tap built-in detection code for KEY_F18:
+		if (code == KEY_F18 && value == 1) {
+			pr_info("%s double tap (zf9 code)\n",__func__);
+			if (screen_on) {
+				if (fingerprint_pressed == 1) { // there was no release of the fingerprint button, so go screen off with signalling that here...
+					powering_down_with_fingerprint_still_pressed = 1;
+				} else { 
+					powering_down_with_fingerprint_still_pressed = 0; 
+				}
+#if 0 /* zf9 - not needed, earlier key event triggers vib */
+				queue_work(ifilter_vib_wq, &ifilter_vib_work);
+#endif
+				mdelay(50); // delay a bit, so finger up can trigger input event in goofix driver before screen off suspend...causes issues with fp input events after screen wake otherwise
+				ifilter_pwrtrigger(0,0,__func__);
+				do_home_button_off_too_in_work_func = 0;
+			}
+			return true;
+		} else if (code == KEY_F18 && value == 0) {
+			return true;
+		}
+// zf9
+#endif /* end zf9 */
 	if (value > 0) {
 		if (!screen_on) {
-			return false; // don't filter so pin appears
+			return IFILTER_FILTER_ALL_KEY_EVENTS_IN_DTAP; // don't filter so pin appears
 		} else {
 			fingerprint_pressed = 1;
 			pr_info("ifilter %s starting trigger \n",__func__);
@@ -1310,11 +1341,11 @@ static bool ifilter_input_filter(struct input_handle *handle,
 		if (fingerprint_pressed) {
 			if (!screen_on) {
 				if (!powering_down_with_fingerprint_still_pressed) {
-					return false; // don't filter so pin appears
+					return IFILTER_FILTER_ALL_KEY_EVENTS_IN_DTAP; // don't filter so pin appears
 				} else {
 					// fingerprint release happens after a screen off that started AFTER the fingerprint was pressed. So do not wake the screen
 					powering_down_with_fingerprint_still_pressed = 0;
-					return false;
+					return IFILTER_FILTER_ALL_KEY_EVENTS_IN_DTAP;
 				}
 			} else {
 				// screen is on...
@@ -1334,7 +1365,7 @@ static bool ifilter_input_filter(struct input_handle *handle,
 					if (screen_on) {
 						do_home_button_off_too_in_work_func = 1;
 					} else {
-						return false;
+						return IFILTER_FILTER_ALL_KEY_EVENTS_IN_DTAP; // screen is off, do not filter, so wake can happen
 					}
 				}
 			}
