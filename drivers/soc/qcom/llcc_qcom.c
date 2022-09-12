@@ -17,6 +17,7 @@
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/soc/qcom/llcc-qcom.h>
+#include <linux/soc/qcom/llcc-tcm.h>
 
 #define ACTIVATE                      BIT(0)
 #define DEACTIVATE                    BIT(1)
@@ -98,69 +99,6 @@
 #define SPAD_LPI_LB_PCB_PWR_STATUS1   0x0058
 #define SPAD_LPI_LB_PCB_PWR_STATUS2   0x005C
 #define SPAD_LPI_LB_PCB_PWR_STATUS3   0x0060
-
-/**
- * llcc_slice_config - Data associated with the llcc slice
- * @usecase_id: Unique id for the client's use case
- * @slice_id: llcc slice id for each client
- * @max_cap: The maximum capacity of the cache slice provided in KB
- * @priority: Priority of the client used to select victim line for replacement
- * @fixed_size: Boolean indicating if the slice has a fixed capacity
- * @bonus_ways: Bonus ways are additional ways to be used for any slice,
- *		if client ends up using more than reserved cache ways. Bonus
- *		ways are allocated only if they are not reserved for some
- *		other client.
- * @res_ways: Reserved ways for the cache slice, the reserved ways cannot
- *		be used by any other client than the one its assigned to.
- * @cache_mode: Each slice operates as a cache, this controls the mode of the
- *             slice: normal or TCM(Tightly Coupled Memory)
- * @probe_target_ways: Determines what ways to probe for access hit. When
- *                    configured to 1 only bonus and reserved ways are probed.
- *                    When configured to 0 all ways in llcc are probed.
- * @dis_cap_alloc: Disable capacity based allocation for a client
- * @retain_on_pc: If this bit is set and client has maintained active vote
- *               then the ways assigned to this client are not flushed on power
- *               collapse.
- * @activate_on_init: Activate the slice immediately after it is programmed
- * @write_scid_en: Enables write cache support for a given scid.
- * @write_scid_cacheable_en: Enables write cache cacheable support for a
- *                          given scid.(Not supported on V2 or older hardware)
- * @stale_en: Enable global staling for the Clients.
- * @stale_cap_en: Enable global staling on over capacity for the Clients
- * @mru_uncap_en: Enable roll over on reserved ways if the current SCID is under capacity.
- * @mru_rollover: Roll over on reserved ways for the client.
- * @alloc_oneway_en: Always allocate one way on over capacity even if there
- *			is no same scid lines for replacement.
- * @ovcap_en: Once current scid is over capacity, allocate other over capacity scid.
- * @ovcap_prio: Once current scid is over capacity, allocate other lower priority
- *			over capacity scid. This setting is ignored if ovcap_en is not set.
- * @vict_prio: When current SCID is under capacity, allocate over other lower than
- *		VICTIM_PL_THRESHOLD priority SCID.
- */
-struct llcc_slice_config {
-	u32 usecase_id;
-	u32 slice_id;
-	u32 max_cap;
-	u32 priority;
-	bool fixed_size;
-	u32 bonus_ways;
-	u32 res_ways;
-	u32 cache_mode;
-	u32 probe_target_ways;
-	bool dis_cap_alloc;
-	bool retain_on_pc;
-	bool activate_on_init;
-	bool write_scid_en;
-	bool write_scid_cacheable_en;
-	bool stale_en;
-	bool stale_cap_en;
-	bool mru_uncap_en;
-	bool mru_rollover;
-	bool alloc_oneway_en;
-	bool ovcap_en;
-	bool ovcap_prio;
-	bool vict_prio;
-};
 
 static u32 llcc_offsets_v2[] = {
 	0x0,
@@ -380,6 +318,32 @@ static const struct llcc_slice_config cape_data[] =  {
 	{LLCC_AENPU,     8, 2048, 1, 1, 0xFFFF, 0x0,   0, 0, 0, 0, 0, 0, 0 },
 };
 
+static const struct llcc_slice_config ukee_data[] =  {
+	{LLCC_CPUSS,     1, 1792, 0, 1, 0xFF, 0x0,   0, 0, 0, 1, 1, 0, 0 },
+	{LLCC_VIDSC0,    2,  512, 3, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_AUDIO,     6, 1024, 1, 1, 0xFF, 0x0,   0, 0, 0, 0, 0, 0, 0 },
+	{LLCC_MDMHPGRW,  7, 512, 3, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_MDMHW,     9, 1024, 1, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_CMPT,     10, 4096, 1, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_GPUHTW,   11,  256, 1, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_GPU,      12, 1024, 1, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 1, 0 },
+	{LLCC_MMUHWT,   13,  256, 1, 1, 0xFF, 0x0,   0, 0, 0, 0, 1, 0, 0 },
+	{LLCC_DISP,     16, 2048, 1, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_MDMPNG,   21, 1024, 0, 1, 0xF0, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_AUDHW,    22, 1024, 1, 1, 0xFF, 0x0,   0, 0, 0, 0, 0, 0, 0 },
+	{LLCC_CVP,      28,  256, 3, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_MDMVPE,   29,   64, 3, 1, 0xF0, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_APTCM,    30, 1024, 3, 1, 0x0,    0xF0,  1, 0, 0, 1, 0, 0, 0 },
+	{LLCC_WRTCH,    31,  256, 1, 1, 0xFF, 0x0,   0, 0, 0, 0, 1, 0, 0 },
+	{LLCC_CVPFW,    17,  512, 1, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_CPUSS1,    3, 1024, 1, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_CAMEXP0,   4,  256, 3, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_CPUMTE,   23,  256, 1, 1, 0x0F, 0x0,   0, 0, 0, 0, 1, 0, 0 },
+	{LLCC_CPUHWT,    5,  512, 1, 1, 0xFF, 0x0,   0, 0, 0, 1, 1, 0, 0 },
+	{LLCC_CAMEXP1,  27,  256, 3, 1, 0xFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
+	{LLCC_AENPU,     8, 2048, 1, 1, 0xFF, 0x0,   0, 0, 0, 0, 0, 0, 0 },
+};
+
 static const struct llcc_slice_config diwali_data[] =  {
 	{LLCC_CPUSS,     1, 1536, 0, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 1, 0, 0 },
 	{LLCC_VIDSC0,    2,  128, 3, 1, 0x0FFF, 0x0,   0, 0, 0, 1, 0, 0, 0 },
@@ -453,6 +417,11 @@ static const struct qcom_llcc_config waipio_cfg = {
 static const struct qcom_llcc_config cape_cfg = {
 	.sct_data       = cape_data,
 	.size           = ARRAY_SIZE(cape_data),
+};
+
+static const struct qcom_llcc_config ukee_cfg = {
+	.sct_data       = ukee_data,
+	.size           = ARRAY_SIZE(ukee_data),
 };
 
 static struct llcc_drv_data *drv_data = (void *) -EPROBE_DEFER;
@@ -1098,6 +1067,7 @@ static int qcom_llcc_probe(struct platform_device *pdev)
 	struct platform_device *llcc_edac;
 	const struct qcom_llcc_config *cfg;
 	const struct llcc_slice_config *llcc_cfg;
+	struct device_node *tcm_memory_node;
 	void __iomem *ch_reg = NULL;
 	u32 sz, ch_reg_sz, ch_reg_off, ch_num;
 
@@ -1233,6 +1203,12 @@ static int qcom_llcc_probe(struct platform_device *pdev)
 	if (of_platform_populate(dev->of_node, NULL, NULL, dev) < 0)
 		dev_err(dev, "llcc populate failed!!\n");
 
+	tcm_memory_node = of_parse_phandle(dev->of_node, "memory-region", 0);
+	if (tcm_memory_node) {
+		ret = qcom_llcc_tcm_probe(pdev, llcc_cfg, sz, tcm_memory_node);
+		if (ret)
+			dev_err(dev, "Failed to probe TCM manager\n");
+	}
 	return 0;
 err:
 	drv_data = ERR_PTR(-ENODEV);
@@ -1249,6 +1225,7 @@ static const struct of_device_id qcom_llcc_of_match[] = {
 	{ .compatible = "qcom,waipio-llcc", .data = &waipio_cfg },
 	{ .compatible = "qcom,diwali-llcc", .data = &diwali_cfg },
 	{ .compatible = "qcom,cape-llcc", .data = &cape_cfg },
+	{ .compatible = "qcom,ukee-llcc", .data = &ukee_cfg },
 	{ .compatible = "qcom,anorak-llcc", .data = &anorak_cfg },
 	{ }
 };
