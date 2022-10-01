@@ -4142,7 +4142,6 @@ static inline void sdhci_msm_get_of_property(struct platform_device *pdev,
 	of_property_read_u32(node, "qcom,dll-config", &msm_host->dll_config);
 }
 
-
 static void sdhci_msm_clkgate_bus_delayed_work(struct work_struct *work)
 {
 	struct sdhci_msm_host *msm_host = container_of(work,
