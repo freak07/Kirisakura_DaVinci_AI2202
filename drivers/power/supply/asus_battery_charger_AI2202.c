@@ -17,6 +17,11 @@
 #include <linux/extcon.h>
 #include <../../extcon-asus/extcon-asus.h>
 #include <linux/iio/consumer.h>
+// Battery Safety +++
+#include <linux/reboot.h>
+#include <linux/proc_fs.h>
+#include <linux/rtc.h>
+// Battery Safety ---
 
 //[+++] Add debug log
 #define CHARGER_TAG "[BAT][CHG]"
@@ -67,6 +72,1232 @@ static int battery_chg_write(struct battery_chg_dev *bcdev, void *data, int len)
 static int read_property_id(struct battery_chg_dev *bcdev, struct psy_state *pst, u32 prop_id);
 ssize_t oem_prop_read(enum battman_oem_property prop, size_t count);
 ssize_t oem_prop_write(enum battman_oem_property prop, u32 *buf, size_t count);
+
+//ASUS_BSP battery safety upgrade +++
+/* Cycle Count Date Structure saved in emmc
+ * magic - magic number for data verification
+ * charge_cap_accum - Accumulated charging capacity
+ * charge_last_soc - last saved soc before reset/shutdown
+ * [0]:battery_soc [1]:system_soc [2]:monotonic_soc
+ */
+struct CYCLE_COUNT_DATA{
+    int magic;
+    int cycle_count;
+    unsigned long battery_total_time;
+    unsigned long high_vol_total_time;
+    unsigned long high_temp_total_time;
+    unsigned long high_temp_vol_time;
+    u32 reload_condition;
+};
+
+#define HIGH_TEMP   350
+#define HIGHER_TEMP 450
+#define FULL_CAPACITY_VALUE 100
+#define BATTERY_USE_TIME_CONDITION1  (1*30*24*60*60) //1Months
+#define BATTERY_USE_TIME_CONDITION2  (3*30*24*60*60) //3Months
+#define BATTERY_USE_TIME_CONDITION3  (12*30*24*60*60) //12Months
+#define BATTERY_USE_TIME_CONDITION4  (18*30*24*60*60) //18Months
+#define CYCLE_COUNT_CONDITION1  100
+#define CYCLE_COUNT_CONDITION2  400
+#define HIGH_TEMP_VOL_TIME_CONDITION1 (15*24*60*60)  //15Days
+#define HIGH_TEMP_VOL_TIME_CONDITION2 (30*24*60*60)  //30Days
+#define HIGH_TEMP_TIME_CONDITION1     (6*30*24*60*60) //6Months
+#define HIGH_TEMP_TIME_CONDITION2     (12*30*24*60*60) //12Months
+#define HIGH_VOL_TIME_CONDITION1     (6*30*24*60*60) //6Months
+#define HIGH_VOL_TIME_CONDITION2     (12*30*24*60*60) //12Months
+
+enum calculation_time_type {
+    TOTOL_TIME_CAL_TYPE,
+    HIGH_VOL_CAL_TYPE,
+    HIGH_TEMP_CAL_TYPE,
+    HIGH_TEMP_VOL_CAL_TYPE,
+};
+
+#define CYCLE_COUNT_DATA_MAGIC  0x85
+#define CYCLE_COUNT_FILE_NAME   "/batinfo/.bs"
+#define BAT_PERCENT_FILE_NAME   "/batinfo/Batpercentage"
+#define BAT_SAFETY_FILE_NAME   "/batinfo/bat_safety"
+#define CYCLE_COUNT_SD_FILE_NAME   "/sdcard/.bs"
+#define BAT_PERCENT_SD_FILE_NAME   "/sdcard/Batpercentage"
+// #define BAT_CYCLE_SD_FILE_NAME   "/sdcard/Batcyclecount"
+#define CYCLE_COUNT_DATA_OFFSET  0x0
+#define FILE_OP_READ   0
+#define FILE_OP_WRITE   1
+#define BATTERY_SAFETY_UPGRADE_TIME 1*60
+#define INIT_FV 4510
+
+static bool g_cyclecount_initialized = false;
+// extern bool rtc_probe_done;
+struct bat_safety_condition{
+    unsigned long condition1_battery_time;
+    unsigned long condition2_battery_time;
+    unsigned long condition3_battery_time;
+    unsigned long condition4_battery_time;
+    int condition1_cycle_count;
+    int condition2_cycle_count;
+    unsigned long condition1_temp_vol_time;
+    unsigned long condition2_temp_vol_time;
+    unsigned long condition1_temp_time;
+    unsigned long condition2_temp_time;
+    unsigned long condition1_vol_time;
+    unsigned long condition2_vol_time;
+};
+
+static struct bat_safety_condition safety_cond;
+
+static struct CYCLE_COUNT_DATA g_cycle_count_data = {
+    .magic = CYCLE_COUNT_DATA_MAGIC,
+    .cycle_count=0,
+    .battery_total_time = 0,
+    .high_vol_total_time = 0,
+    .high_temp_total_time = 0,
+    .high_temp_vol_time = 0,
+    .reload_condition = 0
+};
+struct delayed_work battery_safety_work;
+extern unsigned long asus_qpnp_rtc_read_time(void);
+extern bool rtc_probe_done;
+
+#define Bat_SAFETY_STR_MAXLEN (256)
+#define Bat_SAFETY_MAX_ITEM (32)
+static struct mutex mA;
+
+struct file_message {
+    char *message;
+    int read;
+    int write;
+};
+
+//batinfo/bat_safety
+struct file_message Batt_Safety = {
+    .message = NULL,
+    .read = 0,
+    .write = 0
+};
+
+//batinfo/.bs
+struct file_message Batt_bs = {
+    .message = NULL,
+    .read = 0,
+    .write = 0
+};
+
+//batinfo/bat_percent
+struct file_message Batt_percent = {
+    .message = NULL,
+    .read = 0,
+    .write = 0
+};
+
+//sdcard/.bs
+struct file_message Batt_sd_bs = {
+    .message = NULL,
+    .read = 0,
+    .write = 0
+};
+
+//sdcard/bat_percent
+struct file_message Batt_sd_percent = {
+    .message = NULL,
+    .read = 0,
+    .write = 0
+};
+
+static void init_battery_safety(struct bat_safety_condition *cond)
+{
+    cond->condition1_battery_time = BATTERY_USE_TIME_CONDITION1;
+    cond->condition2_battery_time = BATTERY_USE_TIME_CONDITION2;
+    cond->condition3_battery_time = BATTERY_USE_TIME_CONDITION3;
+    cond->condition4_battery_time = BATTERY_USE_TIME_CONDITION4;
+    cond->condition1_cycle_count = CYCLE_COUNT_CONDITION1;
+    cond->condition2_cycle_count = CYCLE_COUNT_CONDITION2;
+    cond->condition1_temp_vol_time = HIGH_TEMP_VOL_TIME_CONDITION1;
+    cond->condition2_temp_vol_time = HIGH_TEMP_VOL_TIME_CONDITION2;
+    cond->condition1_temp_time = HIGH_TEMP_TIME_CONDITION1;
+    cond->condition2_temp_time = HIGH_TEMP_TIME_CONDITION2;
+    cond->condition1_vol_time = HIGH_VOL_TIME_CONDITION1;
+    cond->condition2_vol_time = HIGH_VOL_TIME_CONDITION2;
+}
+
+static void set_full_charging_voltage(void)
+{
+    int rc;
+    u32 tmp;
+
+    if(0 == g_cycle_count_data.reload_condition){
+
+    }else if(1 == g_cycle_count_data.reload_condition){
+        tmp = INIT_FV - 20;
+    }else if(2 == g_cycle_count_data.reload_condition){
+        tmp = INIT_FV - 50;
+    }else if(3 == g_cycle_count_data.reload_condition){
+        tmp = INIT_FV - 100;
+    }else if(4 == g_cycle_count_data.reload_condition){
+        tmp = INIT_FV - 150;
+    }
+
+    if(0 != g_cycle_count_data.reload_condition){
+        CHG_DBG("%s. set BATTMAN_OEM_FV : %d", __func__, tmp);
+        rc = oem_prop_write(BATTMAN_OEM_FV, &tmp, 1);
+        if (rc < 0) {
+            pr_err("Failed to set BATTMAN_OEM_FV rc=%d\n", rc);
+        }
+    }
+}
+
+void Batinfo_WT(struct file_message *file_msg, char *buf, int length)
+{
+    // va_list args;
+    char *buffer;
+
+    if (!in_interrupt() && !in_atomic() && !irqs_disabled()){
+        mutex_lock(&mA);
+    }
+    CHG_DBG_E("%s +++\n", __func__);
+
+    buffer = &(file_msg->message)[(file_msg->write*Bat_SAFETY_STR_MAXLEN)];
+    file_msg->write++;
+    file_msg->write %= Bat_SAFETY_MAX_ITEM;
+
+    if (!in_interrupt() && !in_atomic() && !irqs_disabled()){
+        mutex_unlock(&mA);
+    }
+
+    memset(buffer, 0, Bat_SAFETY_STR_MAXLEN);
+    if (buffer) {
+        if(length > Bat_SAFETY_STR_MAXLEN)
+            length = Bat_SAFETY_STR_MAXLEN;
+        memcpy(buffer, buf, length);
+    } else {
+        printk("Batinfo_wr buffer cannot be allocated\n");
+    }
+}
+// EXPORT_SYMBOL(ASUSEvtlog);
+static DECLARE_WAIT_QUEUE_HEAD(log_wait);
+
+static int file_op(const char *filename, loff_t offset, char *buf, int length, int operation)
+{
+    int str_len = 0;
+    char *pchar;
+    struct file_message *file_msg;
+    int readID = 0;
+    CHG_DBG_E("%s +++\n", __func__);
+
+    if(!strcmp(filename, BAT_SAFETY_FILE_NAME))
+    {
+        file_msg = &Batt_Safety;
+    }
+    else if(!strcmp(filename, CYCLE_COUNT_FILE_NAME))
+    {
+        file_msg = &Batt_bs;
+    }
+    else if(!strcmp(filename, BAT_PERCENT_FILE_NAME))
+    {
+        file_msg = &Batt_percent;
+    }
+    else if(!strcmp(filename, CYCLE_COUNT_SD_FILE_NAME))
+    {
+        file_msg = &Batt_sd_bs;
+    }
+    else if(!strcmp(filename, BAT_PERCENT_SD_FILE_NAME))
+    {
+        file_msg = &Batt_sd_percent;
+    }
+    else
+    {
+        return 0;
+    }
+
+    if(length > Bat_SAFETY_STR_MAXLEN)
+        length = Bat_SAFETY_STR_MAXLEN;
+
+    if(FILE_OP_READ == operation)
+    {
+        readID = file_msg->write - 1;
+        if(readID < 0) return 0;
+        str_len = length;
+        pchar = &(file_msg->message)[(readID*Bat_SAFETY_STR_MAXLEN)];
+
+        if (copy_to_user(buf, pchar, str_len)) {
+            if (!str_len)
+                str_len = -EFAULT;
+        }
+    }
+    else if(FILE_OP_WRITE == operation) {
+        Batinfo_WT(file_msg, buf, length);
+        wake_up_interruptible(&log_wait);
+    }
+
+    return length;
+}
+
+static struct file_message* get_file_msg(struct file *file)
+{
+    struct file_message *file_msg;
+    CHG_DBG_E("%s +++\n", __func__);
+
+    if(!strcmp(file->f_path.dentry->d_iname, "bat_safety_wr"))
+    {
+        file_msg = &Batt_Safety;
+    }
+    else if(!strcmp(file->f_path.dentry->d_iname, "bat_bs_wr"))
+    {
+        file_msg = &Batt_bs;
+    }
+    else if(!strcmp(file->f_path.dentry->d_iname, "bat_percent_wr"))
+    {
+        file_msg = &Batt_percent;
+    }
+    else if(!strcmp(file->f_path.dentry->d_iname, "bat_sd_bs_wr"))
+    {
+        file_msg = &Batt_sd_bs;
+    }
+    else if(!strcmp(file->f_path.dentry->d_iname, "bat_sd_percent_wr"))
+    {
+        file_msg = &Batt_sd_percent;
+    }
+    else
+    {
+        return NULL;
+    }
+
+    return file_msg;
+}
+
+static ssize_t bat_safety_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+{
+    char messages[Bat_SAFETY_STR_MAXLEN];
+    struct file_message *file_msg;
+    if (count > Bat_SAFETY_STR_MAXLEN)
+            count = Bat_SAFETY_STR_MAXLEN;
+    CHG_DBG_E("%s +++\n", __func__);
+
+    memset(messages, 0, sizeof(messages));
+    if (copy_from_user(messages, buf, count))
+            return -EFAULT;
+
+    file_msg = get_file_msg(file);
+    if(file_msg == NULL){
+        CHG_DBG_E("[BAT][CHG]%s file_msg is NULL", __func__);
+        return 0;
+    }
+    Batinfo_WT(file_msg, messages, count);
+    wake_up_interruptible(&log_wait);
+    return count;
+}
+
+
+static ssize_t bat_safety_read(struct file *file, char __user *buf,
+                              size_t count, loff_t *ppos)
+{
+    int str_len = 0;
+    char *pchar;
+    int error = 0;
+    struct file_message *file_msg;
+    file_msg = get_file_msg(file);
+    CHG_DBG_E("%s +++\n", __func__);
+
+    error = wait_event_interruptible(log_wait,
+                         file_msg->read != file_msg->write);
+
+    if(!(file_msg->read != file_msg->write)) return 0;
+    mutex_lock(&mA);
+    str_len = count;
+    if(str_len > Bat_SAFETY_STR_MAXLEN)
+        str_len = Bat_SAFETY_STR_MAXLEN;
+    pchar = &(file_msg->message)[(file_msg->read*Bat_SAFETY_STR_MAXLEN)];
+    file_msg->read++;
+    file_msg->read %= Bat_SAFETY_MAX_ITEM;
+    mutex_unlock(&mA);
+
+    if (copy_to_user(buf, pchar, str_len)) {
+        if (!str_len)
+            str_len = -EFAULT;
+    }
+
+    return str_len;
+}
+
+static const struct proc_ops proc_bat_safety_operations = {
+        .proc_write  = bat_safety_write,
+        .proc_read   = bat_safety_read,
+};
+
+static int backup_bat_percentage(void)
+{
+    char buf[5]={0};
+    int bat_percent = 0;
+    int rc;
+    CHG_DBG_E("%s +++\n", __func__);
+
+    if(0 == g_cycle_count_data.reload_condition){
+        bat_percent = 0;
+    }else if(3 == g_cycle_count_data.reload_condition){
+        bat_percent = 95;
+    }else if(4 == g_cycle_count_data.reload_condition){
+        bat_percent = 90;
+    }
+    sprintf(buf, "%d\n", bat_percent);
+    CHG_DBG("[BAT][CHG]%s bat_percent=%d; reload_condition=%d\n", __func__, bat_percent, g_cycle_count_data.reload_condition);
+
+    rc = file_op(BAT_PERCENT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char *)&buf, sizeof(char)*5, FILE_OP_WRITE);
+    if(rc<0)
+        pr_err("%s:Write file:%s err!\n", __func__, BAT_PERCENT_FILE_NAME);
+
+    return rc;
+}
+
+static int backup_bat_safety(void)
+{
+    char buf[70]={0};
+    int rc;
+    CHG_DBG_E("%s +++\n", __func__);
+
+    sprintf(buf, "%lu,%d,%lu,%lu,%lu\n",
+        g_cycle_count_data.battery_total_time,
+        g_cycle_count_data.cycle_count,
+        g_cycle_count_data.high_temp_total_time,
+        g_cycle_count_data.high_vol_total_time,
+        g_cycle_count_data.high_temp_vol_time);
+
+    rc = file_op(BAT_SAFETY_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char *)&buf, sizeof(char)*70, FILE_OP_WRITE);
+    if(rc<0)
+        pr_err("%s:Write file:%s err!\n", __func__, BAT_SAFETY_FILE_NAME);
+
+    return rc;
+}
+
+static int init_batt_cycle_count_data(void)
+{
+    int rc = 0;
+    struct CYCLE_COUNT_DATA buf;
+    CHG_DBG_E("%s +++\n", __func__);
+
+    /* Read cycle count data from emmc */
+    rc = file_op(CYCLE_COUNT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char*)&buf, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_READ);
+    if(rc < 0) {
+        pr_err("Read cycle count file failed!\n");
+        return rc;
+    }
+
+    /* Check data validation */
+    if(buf.magic != CYCLE_COUNT_DATA_MAGIC) {
+        pr_err("data validation!\n");
+        file_op(CYCLE_COUNT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char*)&g_cycle_count_data, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_WRITE);
+        return -1;
+    }else {
+        /* Update current value */
+        CHG_DBG("[BAT][CHG]%s Update current value!\n", __func__);
+        g_cycle_count_data.cycle_count = buf.cycle_count;
+        g_cycle_count_data.high_temp_total_time = buf.high_temp_total_time;
+        g_cycle_count_data.high_temp_vol_time = buf.high_temp_vol_time;
+        g_cycle_count_data.high_vol_total_time = buf.high_vol_total_time;
+        g_cycle_count_data.reload_condition = buf.reload_condition;
+        g_cycle_count_data.battery_total_time = buf.battery_total_time;
+
+        rc = backup_bat_percentage();
+        if(rc < 0){
+            pr_err("backup_bat_percentage failed!\n");
+            return -1;
+        }
+
+#if 0
+        rc = backup_bat_cyclecount();
+        if(rc < 0){
+            pr_err("backup_bat_cyclecount failed!\n");
+            return -1;
+        }
+#endif
+
+        rc = backup_bat_safety();
+        if(rc < 0){
+            pr_err("backup_bat_cyclecount failed!\n");
+            return -1;
+        }
+
+        CHG_DBG("[BAT][CHG]%s cycle_count=%d;reload_condition=%d;high_temp_total_time=%lu;high_temp_vol_time=%lu;high_vol_total_time=%lu;battery_total_time=%lu\n",
+            __func__, buf.cycle_count,buf.reload_condition, buf.high_temp_total_time,buf.high_temp_vol_time,buf.high_vol_total_time,buf.battery_total_time);
+    }
+    CHG_DBG("[BAT][CHG]%s Cycle count data initialize success!\n", __func__);
+    g_cyclecount_initialized = true;
+    set_full_charging_voltage();
+    return 0;
+}
+
+static void write_back_cycle_count_data(void)
+{
+    int rc;
+    CHG_DBG_E("%s +++\n", __func__);
+
+    backup_bat_percentage();
+    //backup_bat_cyclecount();
+    backup_bat_safety();
+    //batt_safety_csc_backup();
+
+    rc = file_op(CYCLE_COUNT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char *)&g_cycle_count_data, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_WRITE);
+    if(rc<0)
+        pr_err("%s:Write file:%s err!\n", __func__, CYCLE_COUNT_FILE_NAME);
+}
+
+static void asus_reload_battery_profile(int value){
+    CHG_DBG_E("%s +++\n", __func__);
+
+    //save current status
+    write_back_cycle_count_data();
+
+    //reloade battery
+    //reload_battery_profile(chip);
+    set_full_charging_voltage();
+
+    CHG_DBG("[BAT][CHG]%s !!new profile is value=%d\n", __func__, value);
+}
+
+static void asus_judge_reload_condition(struct bat_safety_condition *safety_cond)
+{
+    int temp_condition = 0;
+    int cycle_count = 0;
+    // bool full_charge;
+    unsigned long local_high_vol_time = g_cycle_count_data.high_vol_total_time;
+    unsigned long local_high_temp_time = g_cycle_count_data.high_temp_total_time;
+    //unsigned long local_high_temp_vol_time = g_cycle_count_data.high_temp_vol_time;
+    unsigned long local_battery_total_time = g_cycle_count_data.battery_total_time;
+    CHG_DBG_E("%s +++\n", __func__);
+
+    temp_condition = g_cycle_count_data.reload_condition;
+    if(temp_condition >= 4){ //if condition=2 will return
+        return ;
+    }
+
+    //only full charger can load new profile
+    // full_charge = fg->charge_done;
+    // if(!full_charge)
+    //     return ;
+
+    //1.judge battery using total time
+    if(local_battery_total_time >= safety_cond->condition4_battery_time){
+        g_cycle_count_data.reload_condition = 4;
+        goto DONE;
+    }else if(local_battery_total_time >= safety_cond->condition3_battery_time &&
+        local_battery_total_time < safety_cond->condition4_battery_time){
+        g_cycle_count_data.reload_condition = 3;
+    }
+    else if(local_battery_total_time >= safety_cond->condition2_battery_time &&
+        local_battery_total_time < safety_cond->condition3_battery_time){
+        g_cycle_count_data.reload_condition = 2;
+    }else if(local_battery_total_time >= safety_cond->condition1_battery_time &&
+        local_battery_total_time < safety_cond->condition2_battery_time){
+        g_cycle_count_data.reload_condition = 1;
+    }
+
+    //2. judge battery cycle count
+    cycle_count = g_cycle_count_data.cycle_count;
+#if 0 //disable reloade condition with cycle_count
+    if(cycle_count >= chip->condition2_cycle_count){
+        g_cycle_count_data.reload_condition = 2;
+        goto DONE;
+    }else if(cycle_count >= chip->condition1_cycle_count &&
+        cycle_count < chip->condition2_cycle_count){
+        g_cycle_count_data.reload_condition = 1;
+    }
+#endif
+#if 0 //disable reloade condition with high_temp_vol
+    //3. judge high temp and voltage condition
+    if(local_high_temp_vol_time >= fg->condition2_temp_vol_time){
+        g_cycle_count_data.reload_condition = 2;
+        goto DONE;
+    }else if(local_high_temp_vol_time >= fg->condition1_temp_vol_time &&
+        local_high_temp_vol_time < fg->condition2_temp_vol_time){
+        g_cycle_count_data.reload_condition = 1;
+    }
+#endif
+
+    //4. judge high temp condition
+    if(local_high_temp_time >= safety_cond->condition2_temp_time){
+        g_cycle_count_data.reload_condition = 4;
+        goto DONE;
+    }else if(local_high_temp_time >= safety_cond->condition1_temp_time &&
+        local_high_temp_time < safety_cond->condition2_temp_time){
+        g_cycle_count_data.reload_condition = 3;
+    }
+
+    //5. judge high voltage condition
+    if(local_high_vol_time >= safety_cond->condition2_vol_time){
+        g_cycle_count_data.reload_condition = 4;
+        goto DONE;
+    }else if(local_high_vol_time >= safety_cond->condition1_vol_time &&
+        local_high_vol_time < safety_cond->condition2_vol_time){
+        g_cycle_count_data.reload_condition = 3;
+    }
+
+DONE:
+    if(temp_condition != g_cycle_count_data.reload_condition)
+        asus_reload_battery_profile(g_cycle_count_data.reload_condition);
+
+}
+
+unsigned long last_battery_total_time = 0;
+unsigned long last_high_temp_time = 0;
+unsigned long last_high_vol_time = 0;
+unsigned long last_high_temp_vol_time = 0;
+
+static void calculation_time_fun(int type)
+{
+    unsigned long now_time;
+    unsigned long temp_time = 0;
+
+    now_time = asus_qpnp_rtc_read_time();
+
+    if(now_time < 0){
+        pr_err("asus read rtc time failed!\n");
+        return ;
+    }
+
+    switch(type){
+        case TOTOL_TIME_CAL_TYPE:
+            if(0 == last_battery_total_time){
+                last_battery_total_time = now_time;
+                CHG_DBG("[BAT][CHG]%s now_time=%lu;last_battery_total_time=%lu\n", __func__, now_time, g_cycle_count_data.battery_total_time);
+            }else{
+                temp_time = now_time - last_battery_total_time;
+                if(temp_time > 0)
+                    g_cycle_count_data.battery_total_time += temp_time;
+                last_battery_total_time = now_time;
+            }
+        break;
+
+        case HIGH_VOL_CAL_TYPE:
+            if(0 == last_high_vol_time){
+                last_high_vol_time = now_time;
+                CHG_DBG("[BAT][CHG]%s now_time=%lu;high_vol_total_time=%lu\n", __func__, now_time, g_cycle_count_data.high_vol_total_time);
+            }else{
+                temp_time = now_time - last_high_vol_time;
+                if(temp_time > 0)
+                    g_cycle_count_data.high_vol_total_time += temp_time;
+                last_high_vol_time = now_time;
+            }
+        break;
+
+        case HIGH_TEMP_CAL_TYPE:
+            if(0 == last_high_temp_time){
+                last_high_temp_time = now_time;
+                CHG_DBG("[BAT][CHG]%s now_time=%lu;high_temp_total_time=%lu\n", __func__, now_time, g_cycle_count_data.high_temp_total_time);
+            }else{
+                temp_time = now_time - last_high_temp_time;
+                if(temp_time > 0)
+                    g_cycle_count_data.high_temp_total_time += temp_time;
+                last_high_temp_time = now_time;
+            }
+        break;
+
+        case HIGH_TEMP_VOL_CAL_TYPE:
+            if(0 == last_high_temp_vol_time){
+                last_high_temp_vol_time = now_time;
+                CHG_DBG("[BAT][CHG]%s now_time=%lu;high_temp_vol_time=%lu\n", __func__, now_time, g_cycle_count_data.high_temp_vol_time);
+            }else{
+                temp_time = now_time - last_high_temp_vol_time;
+                if(temp_time > 0)
+                    g_cycle_count_data.high_temp_vol_time += temp_time;
+                last_high_temp_vol_time = now_time;
+            }
+        break;
+    }
+}
+
+static int write_test_value = 0;
+static void update_battery_safe()
+{
+    int rc;
+    int temp;
+    int capacity;
+    union power_supply_propval prop = {};
+
+    CHG_DBG("[BAT][CHG]%s +++", __func__);
+
+    if(g_asuslib_init != true){
+        pr_err("asuslib init is not ready");
+        return;
+    }
+
+    if(g_cyclecount_initialized != true){
+        rc = init_batt_cycle_count_data();
+        if(rc < 0){
+            pr_err("cyclecount is not initialized");
+            return;
+        }
+    }
+
+    rc = power_supply_get_property(qti_phy_bat,
+        POWER_SUPPLY_PROP_TEMP, &prop);
+    if (rc < 0) {
+        pr_err("Error in getting battery temp, rc=%d\n", rc);
+    }
+    temp= prop.intval;
+
+    rc = power_supply_get_property(qti_phy_bat,
+        POWER_SUPPLY_PROP_CAPACITY, &prop);
+    if (rc < 0) {
+        pr_err("Error in getting capacity, rc=%d\n", rc);
+    }
+    capacity = prop.intval;
+
+    rc = power_supply_get_property(qti_phy_bat,
+        POWER_SUPPLY_PROP_CYCLE_COUNT, &prop);
+    if (rc < 0) {
+        pr_err("Error in getting cycle count, rc=%d\n", rc);
+    }
+    g_cycle_count_data.cycle_count = prop.intval;
+
+    CHG_DBG("[BAT][CHG]%s temp=%d, capacity=%d, cycle_count=%d", __func__, temp, capacity, g_cycle_count_data.cycle_count);
+
+    //check data
+    calculation_time_fun(TOTOL_TIME_CAL_TYPE);
+
+    if(capacity == FULL_CAPACITY_VALUE){
+        calculation_time_fun(HIGH_VOL_CAL_TYPE);
+    }else{
+        last_high_vol_time = 0; //exit high vol
+    }
+
+    if(temp >= HIGHER_TEMP){
+        calculation_time_fun(HIGH_TEMP_CAL_TYPE);
+    }else{
+        last_high_temp_time = 0; //exit high temp
+    }
+
+    if(temp >= HIGH_TEMP && capacity == FULL_CAPACITY_VALUE){
+        calculation_time_fun(HIGH_TEMP_VOL_CAL_TYPE);
+    }else{
+        last_high_temp_vol_time = 0; //exit high temp and vol
+    }
+
+    asus_judge_reload_condition(&safety_cond);
+    write_back_cycle_count_data();
+    CHG_DBG("[BAT][CHG]%s ---", __func__);
+}
+
+void battery_safety_worker(struct work_struct *work)
+{
+    pr_err("%s +++\n", __func__);
+
+    update_battery_safe();
+
+    cancel_delayed_work(&battery_safety_work);
+    schedule_delayed_work(&battery_safety_work, BATTERY_SAFETY_UPGRADE_TIME * HZ);
+}
+//ASUS_BSP battery safety upgrade ---
+
+static int cycle_count_proc_show(struct seq_file *buf, void *data)
+{
+    seq_printf(buf, "---show cycle count value---\n");
+
+#if 0  //for debug
+    get_asus_cycle_count(&g_cycle_count_data.cycle_count);
+
+    seq_printf(buf,"cycle[%d,%d,%d,%d,%d,%d,%d,%d]\n",
+        g_fgChip->counter->count[0],g_fgChip->counter->count[1],g_fgChip->counter->count[2],
+        g_fgChip->counter->count[3],g_fgChip->counter->count[4],g_fgChip->counter->count[5],
+        g_fgChip->counter->count[6],g_fgChip->counter->count[7]);
+#endif
+
+    seq_printf(buf, "cycle count:%d\n", g_cycle_count_data.cycle_count);
+
+    return 0;
+}
+
+static int cycle_count_proc_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, cycle_count_proc_show, NULL);
+}
+
+static const struct proc_ops cycle_count_fops = {
+    .proc_open = cycle_count_proc_open,
+    .proc_read = seq_read,
+    .proc_release = single_release,
+};
+
+static int batt_safety_proc_show(struct seq_file *buf, void *data)
+{
+    int rc =0;
+
+    rc = file_op(CYCLE_COUNT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+    (char *)&g_cycle_count_data, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_WRITE);
+    if(rc < 0 )
+        CHG_DBG_E("[BAT][CHG]%s write cycle count file error\n", __func__);
+
+    seq_printf(buf, "---show battery safety value---\n");
+    seq_printf(buf, "cycle_count:%d\n", g_cycle_count_data.cycle_count);
+    seq_printf(buf, "battery_total_time:%lu\n", g_cycle_count_data.battery_total_time);
+    seq_printf(buf, "high_temp_total_time:%lu\n", g_cycle_count_data.high_temp_total_time);
+    seq_printf(buf, "high_vol_total_time:%lu\n", g_cycle_count_data.high_vol_total_time);
+    seq_printf(buf, "high_temp_vol_time:%lu\n", g_cycle_count_data.high_temp_vol_time);
+    seq_printf(buf, "reload_condition:%d\n", g_cycle_count_data.reload_condition);
+
+    return 0;
+}
+static int batt_safety_proc_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, batt_safety_proc_show, NULL);
+}
+
+static ssize_t batt_safety_proc_write(struct file *file,const char __user *buffer,size_t count,loff_t *pos)
+{
+    int value=0;
+    unsigned long time = 0;
+    char buf[30] = {0};
+    size_t buf_size;
+    char *start = buf;
+
+    buf_size = min(count, (size_t)(sizeof(buf)-1));
+    if (copy_from_user(buf, buffer, buf_size)) {
+        CHG_DBG_E("[BAT][CHG]%s Failed to copy from user\n", __func__);
+        return -EFAULT;
+    }
+    buf[buf_size] = 0;
+
+    sscanf(start, "%d", &value);
+    while (*start++ != ' ');
+    sscanf(start, "%lu", &time);
+
+    write_test_value = value;
+
+    switch(value){
+        case 1:
+            g_cycle_count_data.battery_total_time = time;
+        break;
+        case 2:
+            g_cycle_count_data.cycle_count = (int)time;
+        break;
+        case 3:
+            g_cycle_count_data.high_temp_vol_time = time;
+        break;
+        case 4:
+            g_cycle_count_data.high_temp_total_time = time;
+        break;
+        case 5:
+            g_cycle_count_data.high_vol_total_time = time;
+        break;
+        default:
+            CHG_DBG("[BAT][CHG]%s input error!Now return\n", __func__);
+            return count;
+    }
+    asus_judge_reload_condition(&safety_cond);
+    CHG_DBG("[BAT][CHG]%s value=%d;time=%lu\n", __func__, value, time);
+
+    return count;
+}
+
+static const struct proc_ops batt_safety_fops = {
+    .proc_open = batt_safety_proc_open,
+    .proc_read = seq_read,
+    .proc_write = batt_safety_proc_write,
+    .proc_release = single_release,
+};
+
+static int condition_value_proc_show(struct seq_file *buf, void *data)
+{
+    seq_printf(buf, "---show condition value---\n");
+    seq_printf(buf, "condition1 battery time %lu\n", safety_cond.condition1_battery_time);
+    seq_printf(buf, "condition2 battery time %lu\n", safety_cond.condition2_battery_time);
+    seq_printf(buf, "condition3 battery time %lu\n", safety_cond.condition3_battery_time);
+    seq_printf(buf, "condition4 battery time %lu\n", safety_cond.condition4_battery_time);
+    seq_printf(buf, "condition1 cycle count %d\n", safety_cond.condition1_cycle_count);
+    seq_printf(buf, "condition2 cycle count %d\n", safety_cond.condition2_cycle_count);
+    seq_printf(buf, "condition1 temp time %lu\n", safety_cond.condition1_temp_time);
+    seq_printf(buf, "condition2 temp time %lu\n", safety_cond.condition2_temp_time);
+    seq_printf(buf, "condition1 temp&vol time %lu\n", safety_cond.condition1_temp_vol_time);
+    seq_printf(buf, "condition2 temp&vol time %lu\n", safety_cond.condition2_temp_vol_time);
+    seq_printf(buf, "condition1 vol time %lu\n", safety_cond.condition1_vol_time);
+    seq_printf(buf, "condition2 vol time %lu\n", safety_cond.condition2_vol_time);
+
+    return 0;
+}
+
+static int condition_value_proc_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, condition_value_proc_show, NULL);
+}
+
+static ssize_t condition_value_proc_write(struct file *file,const char __user *buffer,size_t count,loff_t *pos)
+{
+    int value = 0;
+    unsigned long condition1_time = 0;
+    unsigned long condition2_time = 0;
+    unsigned long condition3_time = 0;
+    unsigned long condition4_time = 0;
+    char buf[320];
+    char *start = buf;
+
+    if (copy_from_user(buf, buffer, count-1)) {
+        CHG_DBG_E("[BAT][CHG]%s Failed to copy from user\n", __func__);
+        return -EFAULT;
+    }
+    buf[count] = 0;
+
+    sscanf(start, "%d", &value);
+    if(value != 0 && start - buf < count){
+        while (*start++ != ' ');
+        sscanf(start, "%lu", &condition1_time);
+        while (*start++ != ' ');
+        sscanf(start, "%lu", &condition2_time);
+    }
+    if(value == 1 && start - buf < count){
+        while (*start++ != ' ');
+        sscanf(start, "%lu", &condition3_time);
+        while (*start++ != ' ');
+        sscanf(start, "%lu", &condition4_time);
+    };
+
+    if(value && condition2_time <= condition1_time){
+        CHG_DBG_E("[BAT][CHG]%s input value error,please input correct value!\n", __func__);
+        return count;
+    }
+
+    switch(value){
+        case 0:
+            init_battery_safety(&safety_cond);
+            g_cycle_count_data.reload_condition = 0;
+        break;
+        case 1:
+            safety_cond.condition1_battery_time = condition1_time;
+            safety_cond.condition2_battery_time = condition2_time;
+            safety_cond.condition3_battery_time = condition3_time;
+            safety_cond.condition4_battery_time = condition4_time;
+        break;
+        case 2:
+            safety_cond.condition1_cycle_count = (int)condition1_time;
+            safety_cond.condition2_cycle_count = (int)condition2_time;
+        break;
+        case 3:
+            safety_cond.condition1_temp_vol_time = condition1_time;
+            safety_cond.condition2_temp_vol_time = condition2_time;
+        break;
+        case 4:
+            safety_cond.condition1_temp_time = condition1_time;
+            safety_cond.condition2_temp_time = condition2_time;
+        break;
+        case 5:
+            safety_cond.condition1_vol_time = condition1_time;
+            safety_cond.condition2_vol_time = condition2_time;
+        break;
+    }
+
+    CHG_DBG("[BAT][CHG]%s value=%d;condition1_time=%lu;condition2_time=%lu\n", __func__, value, condition1_time, condition2_time);
+    return count;
+}
+
+static const struct proc_ops condition_value_fops = {
+    .proc_open = condition_value_proc_open,
+    .proc_read = seq_read,
+    .proc_write = condition_value_proc_write,
+    .proc_release = single_release,
+};
+
+static int batt_safety_csc_proc_show(struct seq_file *buf, void *data)
+{
+    int rc =0;
+
+    rc = file_op(CYCLE_COUNT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+    (char *)&g_cycle_count_data, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_WRITE);
+    if(rc < 0 )
+        pr_info("[BAT][CHG]%s write cycle count file error\n", __func__);
+
+    // seq_printf(buf, "---show battery safety value---\n");
+    // seq_printf(buf, "cycle_count:%d\n", g_cycle_count_data.cycle_count);
+    // seq_printf(buf, "battery_total_time:%lu\n", g_cycle_count_data.battery_total_time);
+    // seq_printf(buf, "high_temp_total_time:%lu\n", g_cycle_count_data.high_temp_total_time);
+    // seq_printf(buf, "high_vol_total_time:%lu\n", g_cycle_count_data.high_vol_total_time);
+    // seq_printf(buf, "high_temp_vol_time:%lu\n", g_cycle_count_data.high_temp_vol_time);
+    // seq_printf(buf, "reload_condition:%d\n", g_cycle_count_data.reload_condition);
+
+    seq_printf(buf, "%d,%d,%d,%d,%d",g_cycle_count_data.battery_total_time,
+                                        g_cycle_count_data.cycle_count,
+                                        g_cycle_count_data.high_temp_total_time,
+                                        g_cycle_count_data.high_vol_total_time,
+                                        g_cycle_count_data.high_temp_vol_time);
+
+
+    return 0;
+}
+static int batt_safety_csc_proc_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, batt_safety_csc_proc_show, NULL);
+}
+
+static int batt_safety_csc_erase(void){
+    int rc =0;
+    char buf[1]={0};
+
+    g_cycle_count_data.battery_total_time = 0;
+    g_cycle_count_data.cycle_count = 0;
+    g_cycle_count_data.high_temp_total_time = 0;
+    g_cycle_count_data.high_temp_vol_time = 0;
+    g_cycle_count_data.high_vol_total_time = 0;
+    g_cycle_count_data.reload_condition = 0;
+
+    rc = file_op(CYCLE_COUNT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+    (char *)&g_cycle_count_data, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_WRITE);
+    if(rc < 0 )
+        pr_info("[BAT][CHG]%s Write file:%s err!\n", __func__, CYCLE_COUNT_FILE_NAME);
+
+    rc = file_op(BAT_PERCENT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char *)&buf, sizeof(char), FILE_OP_WRITE);
+    if(rc<0)
+        pr_info("[BAT][CHG]%s Write file:%s err!\n", __func__, BAT_PERCENT_FILE_NAME);
+
+    pr_info("[BAT][CHG]%s Done! rc(%d)\n", __func__,rc);
+    return rc;
+}
+
+int batt_safety_csc_backup(void){
+    int rc = 0;
+    struct CYCLE_COUNT_DATA buf;
+//  char buf2[1]={0};
+
+    rc = file_op(CYCLE_COUNT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char*)&buf, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_READ);
+    if(rc < 0) {
+        pr_info("[BAT][CHG]%s Read cycle count file failed!\n", __func__);
+        return rc;
+    }
+
+    rc = file_op(CYCLE_COUNT_SD_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char *)&buf, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_WRITE);
+    if(rc < 0 )
+        pr_info("[BAT][CHG]%s Write cycle count file failed!\n", __func__);
+#if 0
+    rc = file_op(BAT_PERCENT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char*)&buf2, sizeof(char), FILE_OP_READ);
+    if(rc < 0) {
+        pr_info("[BAT][CHG]%s Read cycle count percent file failed!\n");
+        return rc;
+    }
+
+    rc = file_op(BAT_PERCENT_SD_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+    (char *)&buf2, sizeof(char), FILE_OP_WRITE);
+    if(rc < 0 )
+        pr_info("[BAT][CHG]%s Write cycle count percent file failed!\n");
+#endif
+    pr_info("[BAT][CHG]%s Done!\n", __func__);
+    return rc;
+}
+
+static int batt_safety_csc_restore(void){
+    int rc = 0;
+    struct CYCLE_COUNT_DATA buf;
+    char buf2[1]={0};
+
+    rc = file_op(CYCLE_COUNT_SD_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char*)&buf, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_READ);
+    if(rc < 0) {
+        pr_info("[BAT][CHG]%s Read cycle count file failed!\n", __func__);
+        return rc;
+    }
+
+    rc = file_op(CYCLE_COUNT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+    (char *)&buf, sizeof(struct CYCLE_COUNT_DATA), FILE_OP_WRITE);
+    if(rc < 0 )
+        pr_info("[BAT][CHG]%s Write cycle count file failed!\n", __func__);
+
+    rc = file_op(BAT_PERCENT_SD_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+        (char*)&buf2, sizeof(char), FILE_OP_READ);
+    if(rc < 0) {
+        pr_info("[BAT][CHG]%s Read cycle count percent file failed!\n", __func__);
+        return rc;
+    }
+
+    rc = file_op(BAT_PERCENT_FILE_NAME, CYCLE_COUNT_DATA_OFFSET,
+    (char *)&buf2, sizeof(char), FILE_OP_WRITE);
+    if(rc < 0 )
+        pr_info("[BAT][CHG]%s Write cycle count percent file failed!\n", __func__);
+
+    init_batt_cycle_count_data();
+    pr_info("[BAT][CHG]%s Done! rc(%d)\n", __func__,rc);
+    return rc;
+}
+
+static void batt_safety_csc_stop(void){
+
+    cancel_delayed_work(&battery_safety_work);
+    pr_info("[BAT][CHG]%s Done! \n", __func__);
+}
+
+static void batt_safety_csc_start(void){
+
+    schedule_delayed_work(&battery_safety_work, 0);
+    pr_info("[BAT][CHG]%s Done! \n", __func__);
+}
+
+static ssize_t batt_safety_csc_proc_write(struct file *file,const char __user *buffer,size_t count,loff_t *pos)
+{
+    int value=0;
+    char buf[2] = {0};
+    size_t buf_size;
+    char *start = buf;
+
+    buf_size = min(count, (size_t)(sizeof(buf)-1));
+    if (copy_from_user(buf, buffer, buf_size)) {
+        pr_info("[BAT][CHG]%s Failed to copy from user\n", __func__);
+        return -EFAULT;
+    }
+    buf[buf_size] = 0;
+
+    sscanf(start, "%d", &value);
+
+    switch(value){
+        case 0: //erase
+            batt_safety_csc_erase();
+        break;
+        case 1: //backup /persist to /sdcard
+            batt_safety_csc_backup();
+        break;
+        case 2: //resotre /sdcard from /persist
+            batt_safety_csc_restore();
+        break;
+        case 3://stop battery safety upgrade
+            batt_safety_csc_stop();
+            break;
+        case 4: //start safety upgrade
+            batt_safety_csc_start();
+            break;
+        case 5: // disable battery health debug log
+            // batt_health_upgrade_debug_enable(false);
+            break;
+        case 6: // enable battery health debug log
+            // batt_health_upgrade_debug_enable(true);
+            break;
+        case 7: // disable battery health upgrade
+            // batt_health_upgrade_enable(false);
+            break;
+        case 8: // enable battery health upgrade
+            // batt_health_upgrade_enable(true);
+            break;
+        case 9: //initial battery safety upgrade
+            init_batt_cycle_count_data();
+            break;
+        default:
+            pr_info("[BAT][CHG]%s input error!Now return\n", __func__);
+            return count;
+    }
+
+    return count;
+}
+
+static const struct proc_ops batt_safety_csc_fops = {
+    .proc_open = batt_safety_csc_proc_open,
+    .proc_read = seq_read,
+    .proc_write = batt_safety_csc_proc_write,
+    .proc_release = single_release,
+};
+
+static void create_batt_cycle_count_proc_file(void)
+{
+    struct proc_dir_entry *asus_batt_cycle_count_dir = proc_mkdir("Batt_Cycle_Count", NULL);
+    void *start;
+    int ret = 0;
+
+    struct proc_dir_entry *asus_bat_safety_proc_file = proc_create("bat_safety_wr", S_IRWXUGO,
+        asus_batt_cycle_count_dir, &proc_bat_safety_operations);
+    struct proc_dir_entry *asus_bat_bs_proc_file = proc_create("bat_bs_wr", S_IRWXUGO,
+        asus_batt_cycle_count_dir, &proc_bat_safety_operations);
+    struct proc_dir_entry *asus_bat_percent_proc_file = proc_create("bat_percent_wr", S_IRWXUGO,
+        asus_batt_cycle_count_dir, &proc_bat_safety_operations);
+    struct proc_dir_entry *asus_bat_sd_bs_proc_file = proc_create("bat_sd_bs_wr", S_IRWXUGO,
+        asus_batt_cycle_count_dir, &proc_bat_safety_operations);
+    struct proc_dir_entry *asus_bat_sd_percent_proc_file = proc_create("bat_sd_percent_wr", S_IRWXUGO,
+        asus_batt_cycle_count_dir, &proc_bat_safety_operations);
+
+    struct proc_dir_entry *asus_batt_cycle_count_proc_file = proc_create("cycle_count", 0666,
+        asus_batt_cycle_count_dir, &cycle_count_fops);
+    struct proc_dir_entry *asus_batt_batt_safety_proc_file = proc_create("batt_safety", 0666,
+        asus_batt_cycle_count_dir, &batt_safety_fops);
+    struct proc_dir_entry *asus_batt_batt_safety_csc_proc_file = proc_create("batt_safety_csc", 0666,
+        asus_batt_cycle_count_dir, &batt_safety_csc_fops);
+    struct proc_dir_entry *asus_batt_safety_condition_proc_file = proc_create("condition_value", 0666,
+        asus_batt_cycle_count_dir, &condition_value_fops);
+
+    if (!asus_batt_cycle_count_dir)
+        CHG_DBG("[BAT][CHG]%s batt_cycle_count_dir create failed!\n", __func__);
+    if (!asus_bat_safety_proc_file)
+        CHG_DBG("[BAT][CHG]%s asus_bat_safety_proc_file create failed!\n", __func__);
+    if (!asus_bat_bs_proc_file)
+        CHG_DBG("[BAT][CHG]%s asus_bat_bs_proc_file create failed!\n", __func__);
+    if (!asus_bat_percent_proc_file)
+        CHG_DBG("[BAT][CHG]%s asus_bat_percent_proc_file create failed!\n", __func__);
+    if (!asus_bat_sd_bs_proc_file)
+        CHG_DBG("[BAT][CHG]%s asus_bat_sd_bs_proc_file create failed!\n", __func__);
+    if (!asus_bat_sd_percent_proc_file)
+        CHG_DBG("[BAT][CHG]%s asus_bat_sd_percent_proc_file create failed!\n", __func__);
+    if (!asus_batt_cycle_count_proc_file)
+        CHG_DBG("[BAT][CHG]%s batt_cycle_count_proc_file create failed!\n", __func__);
+    if(!asus_batt_batt_safety_proc_file)
+        CHG_DBG("[BAT][CHG]%s batt_safety_proc_file create failed!\n", __func__);
+    if(!asus_batt_batt_safety_csc_proc_file)
+        CHG_DBG("batt_safety_csc_proc_file create failed!\n");
+    if (!asus_batt_safety_condition_proc_file)
+        CHG_DBG(" create asus_batt_safety_condition_proc_file failed!\n");
+
+    start = kzalloc((Bat_SAFETY_MAX_ITEM * Bat_SAFETY_STR_MAXLEN), GFP_KERNEL);
+    if (!start) {
+        ret = -ENOMEM;
+        return ;
+    }
+    Batt_Safety.message = (char *)start;
+
+    start = kzalloc((Bat_SAFETY_MAX_ITEM * Bat_SAFETY_STR_MAXLEN), GFP_KERNEL);
+    if (!start) {
+        ret = -ENOMEM;
+        return ;
+    }
+    Batt_bs.message = (char *)start;
+
+    start = kzalloc((Bat_SAFETY_MAX_ITEM * Bat_SAFETY_STR_MAXLEN), GFP_KERNEL);
+    if (!start) {
+        ret = -ENOMEM;
+        return ;
+    }
+    Batt_percent.message = (char *)start;
+
+    start = kzalloc((Bat_SAFETY_MAX_ITEM * Bat_SAFETY_STR_MAXLEN), GFP_KERNEL);
+    if (!start) {
+        ret = -ENOMEM;
+        return ;
+    }
+    Batt_sd_bs.message = (char *)start;
+
+    start = kzalloc((Bat_SAFETY_MAX_ITEM * Bat_SAFETY_STR_MAXLEN), GFP_KERNEL);
+    if (!start) {
+        ret = -ENOMEM;
+        return ;
+    }
+    Batt_sd_percent.message = (char *)start;
+}
+
+static int reboot_shutdown_prep(struct notifier_block *this,
+                  unsigned long event, void *ptr)
+{
+    CHG_DBG("%s +++\n", __func__);
+
+    switch(event) {
+    case SYS_RESTART:
+    case SYS_POWER_OFF:
+        /* Write data back to emmc */
+        write_back_cycle_count_data();
+        break;
+    default:
+        break;
+    }
+    return NOTIFY_DONE;
+}
+/*  Call back function for reboot notifier chain  */
+static struct notifier_block reboot_blk = {
+    .notifier_call  = reboot_shutdown_prep,
+};
+//ASUS_BSP battery safety upgrade ---
 
 //Panel Check +++
 static struct drm_panel *active_panel;
@@ -775,6 +2006,21 @@ static ssize_t chg_disable_jeita_show(struct class *c,
 }
 static CLASS_ATTR_RW(chg_disable_jeita);
 
+static ssize_t asus_get_FG_SoC_show(struct class *c,
+                    struct class_attribute *attr, char *buf)
+{
+    int rc;
+
+    rc = oem_prop_read(BATTMAN_OEM_FG_SoC, 1);
+    if (rc < 0) {
+        pr_err("Failed to get BATTMAN_OEM_FG_SoC rc=%d\n", rc);
+        return rc;
+    }
+
+    return scnprintf(buf, PAGE_SIZE, "%d\n", DIV_ROUND_CLOSEST(ChgPD_Info.fg_real_soc, 100));
+}
+static CLASS_ATTR_RO(asus_get_FG_SoC);
+
 static struct attribute *asuslib_class_attrs[] = {
     &class_attr_pm8350b_icl.attr,
     &class_attr_smb1396_icl.attr,
@@ -797,6 +2043,7 @@ static struct attribute *asuslib_class_attrs[] = {
     &class_attr_smartchg_slow_charging.attr,
     &class_attr_boot_completed.attr,
     &class_attr_chg_disable_jeita.attr,
+    &class_attr_asus_get_FG_SoC.attr,
     NULL,
 };
 ATTRIBUTE_GROUPS(asuslib_class);
@@ -1038,6 +2285,11 @@ static void handle_message(struct battery_chg_dev *bcdev, void *data,
                 ack_set = true;
                 break;
             //ATD ---
+            case BATTMAN_OEM_FG_SoC:
+                CHG_DBG("%s BATTMAN_OEM_FG_SoC successfully\n", __func__);
+                ChgPD_Info.fg_real_soc = oem_read_buffer_resp_msg->data_buffer[0];
+                ack_set = true;
+                break;
             default:
                 ack_set = true;
                 pr_err("Unknown property_id: %u\n", oem_read_buffer_resp_msg->oem_property_id);
@@ -1822,6 +3074,16 @@ int asuslib_init(void) {
 
     //cos battery 48hours protect
     INIT_DELAYED_WORK(&asus_min_check_work, asus_min_check_worker);
+
+    mutex_init(&mA);
+
+    //battery safety upgrade
+    INIT_DELAYED_WORK(&battery_safety_work, battery_safety_worker);
+    init_battery_safety(&safety_cond);
+    // //init_batt_cycle_count_data();
+    create_batt_cycle_count_proc_file();
+    register_reboot_notifier(&reboot_blk);
+    schedule_delayed_work(&battery_safety_work, 30 * HZ);
 
     CHG_DBG_E("Load the asuslib_init Succesfully\n");
     g_asuslib_init = true;

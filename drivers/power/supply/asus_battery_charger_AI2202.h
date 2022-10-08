@@ -65,6 +65,7 @@ struct ADSP_ChargerPD_Info {
     bool    otg_enable;
     int     boot_completed;
     u32     chg_disable_jeita;
+    int     fg_real_soc;
 };
 
 struct battman_oem_read_buffer_req_msg {
@@ -158,6 +159,7 @@ enum battman_oem_property {
     BATTMAN_OEM_SLOW_CHG,
     BATTMAN_OEM_THERMAL_ALERT,
     BATTMAN_OEM_CHG_Disable_Jeita,
+    BATTMAN_OEM_FG_SoC,
     BATTMAN_OEM_PROPERTY_MAX,
 };
 
