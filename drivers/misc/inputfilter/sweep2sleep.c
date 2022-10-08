@@ -164,7 +164,7 @@ static int get_s2s_y_above(void) {
 
 
 // device specifics
-static void s2s_setup_values() {
+static void s2s_setup_values(void) {
 	if (true) {
 		pr_info("%s hw zf9\n",__func__);
 		// leave original values
