@@ -422,7 +422,7 @@ void pwr_press_workqueue(struct work_struct *work)
 				ASUSEvtlog("[Reboot] Power key long press 8 sec\n");
 				msleep(200);
 				printk("force reset device!!\n");
-				kernel_restart(NULL);
+				kernel_restart("asus_force_reboot");
 		}
 	}
 }
@@ -444,7 +444,7 @@ void volDown_press_workqueue(struct work_struct *work)
 				ASUSEvtlog("[Reboot] Power key long press 8 sec\n");
 				msleep(200);
 				printk("force reset device!!\n");
-				kernel_restart(NULL);
+				kernel_restart("asus_force_reboot");
 		}
 	}
 }

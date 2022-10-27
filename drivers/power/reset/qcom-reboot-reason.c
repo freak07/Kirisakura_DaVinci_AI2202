@@ -40,6 +40,7 @@ static struct poweroff_reason reasons[] = {
 	{ "oem-08",			0x0a },
 	{ "official-unlock",		0x0a },
 	{ "kernel_panic",		0x11 },
+	{ "asus_force_reboot",		0x12 },
 #endif
 	{}
 };

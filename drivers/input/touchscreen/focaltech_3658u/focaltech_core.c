@@ -1735,6 +1735,8 @@ static void fts_ts_panel_notifier_callback(enum panel_event_notifier_tag tag,
 		break;
 	case DRM_PANEL_EVENT_BLANK_LP:
 		FTS_DEBUG("received lp event\n");
+		cancel_work_sync(&fts_data->resume_work);
+		fts_ts_suspend(ts_data->dev);
 		break;
 	case DRM_PANEL_EVENT_FPS_CHANGE:
 		FTS_DEBUG("shashank:Received fps change old fps:%d new fps:%d\n",
