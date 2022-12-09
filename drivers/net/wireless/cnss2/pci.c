@@ -1582,6 +1582,9 @@ static cnss_rddm_trigger_debug(struct cnss_pci_data *pci_priv)
 			return -EOPNOTSUPP;
 	}
 
+	if (cnss_pci_check_link_status(pci_priv))
+		return -EINVAL;
+
 	ret = cnss_pci_reg_read(pci_priv, GCC_GCC_SPARE_REG_1, &read_val);
 	cnss_pr_err("Read GCC Spare: 0x%x, ret: %d", read_val, ret);
 	cnss_pr_err("Write GCC Spare with ACE55 Pattern");
@@ -1597,6 +1600,7 @@ static cnss_rddm_trigger_debug(struct cnss_pci_data *pci_priv)
 static cnss_rddm_trigger_check(struct cnss_pci_data *pci_priv)
 {
 	int read_val, ret;
+	u32 pbl_stage, sbl_log_start, sbl_log_size, pbl_wlan_boot_cfg;
 
 	switch (pci_priv->device_id) {
 		case QCA6490_DEVICE_ID:
@@ -1607,9 +1611,21 @@ static cnss_rddm_trigger_check(struct cnss_pci_data *pci_priv)
 			return -EOPNOTSUPP;
 	}
 
+	if (cnss_pci_check_link_status(pci_priv))
+		return -EINVAL;
+
 	ret = cnss_pci_reg_read(pci_priv, GCC_GCC_SPARE_REG_1, &read_val);
 	cnss_pr_err("Read GCC spare to check reset status: 0x%x, ret: %d",
 		    read_val, ret);
+
+	cnss_pci_reg_read(pci_priv, TCSR_PBL_LOGGING_REG, &pbl_stage);
+	cnss_pci_reg_read(pci_priv, PCIE_BHI_ERRDBG2_REG, &sbl_log_start);
+	cnss_pci_reg_read(pci_priv, PCIE_BHI_ERRDBG3_REG, &sbl_log_size);
+	cnss_pci_reg_read(pci_priv, PBL_WLAN_BOOT_CFG, &pbl_wlan_boot_cfg);
+	cnss_pr_dbg("TCSR_PBL_LOGGING: 0x%08x PCIE_BHI_ERRDBG: Start: 0x%08x Size:0x%08x \n",
+		    pbl_stage, sbl_log_start, sbl_log_size);
+	cnss_pr_dbg("PBL_WLAN_BOOT_CFG: 0x%08x\n", pbl_wlan_boot_cfg);
+
 	return ret;
 }
 
