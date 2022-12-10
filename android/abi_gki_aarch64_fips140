@@ -4,7 +4,6 @@
   __put_task_struct
 
 # required by fips140.ko
-  add_random_ready_callback
   aead_register_instance
   ahash_register_instance
   arch_timer_read_counter
@@ -79,7 +78,6 @@
   crypto_unregister_skciphers
   crypto_unregister_template
   crypto_unregister_templates
-  del_random_ready_callback
   down_write
   fpsimd_context_busy
   get_random_bytes
@@ -112,6 +110,7 @@
   _raw_spin_lock
   _raw_spin_unlock
   refcount_warn_saturate
+  rng_is_initialized
   scatterwalk_ffwd
   scatterwalk_map_and_copy
   sg_init_one
@@ -127,7 +126,6 @@
   skcipher_walk_virt
   snprintf
   __stack_chk_fail
-  __stack_chk_guard
   strcmp
   strlcat
   strlcpy

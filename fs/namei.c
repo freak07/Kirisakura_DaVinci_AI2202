@@ -40,6 +40,12 @@
 #include <linux/init_task.h>
 #include <linux/uaccess.h>
 
+//#undef CONFIG_UCI
+
+#ifdef CONFIG_UCI
+#include <linux/uci/uci.h>
+#endif
+
 #include "internal.h"
 #include "mount.h"
 
@@ -1432,6 +1438,8 @@ static bool __follow_mount_rcu(struct nameidata *nd, struct path *path,
 				 * becoming unpinned.
 				 */
 				flags = dentry->d_flags;
+				if (read_seqretry(&mount_lock, nd->m_seq))
+					return false;
 				continue;
 			}
 			if (read_seqretry(&mount_lock, nd->m_seq))
@@ -2186,6 +2194,16 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 {
 	int depth = 0; // depth <= nd->depth
 	int err;
+#ifdef CONFIG_UCI
+	bool uci = false;
+	if (name==NULL || IS_ERR(name)) {
+//		pr_err("%s [cleanslate] critical name is null or ERR!\n",__func__);
+		nd->last_type = LAST_ROOT;
+		nd->flags |= LOOKUP_PARENT;
+		return PTR_ERR(name);
+	}
+	uci = is_uci_path(name);
+#endif
 
 	nd->last_type = LAST_ROOT;
 	nd->flags |= LOOKUP_PARENT;
@@ -2203,6 +2221,10 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 		int type;
 
 		err = may_lookup(nd);
+#ifdef CONFIG_UCI
+		if (uci && err==-13) { //pr_debug("%s uci overriding may_lookup error. file name %s err %d\n",__func__,name, err); 
+			err = 0; }
+#endif
 		if (err)
 			return err;
 
@@ -3356,6 +3378,8 @@ struct dentry *vfs_tmpfile(struct dentry *dentry, umode_t mode, int open_flag)
 	child = d_alloc(dentry, &slash_name);
 	if (unlikely(!child))
 		goto out_err;
+	if (!IS_POSIXACL(dir))
+		mode &= ~current_umask();
 	error = dir->i_op->tmpfile(dir, child, mode);
 	if (error)
 		goto out_err;
@@ -3466,6 +3490,17 @@ struct file *do_filp_open(int dfd, struct filename *pathname,
 	struct nameidata nd;
 	int flags = op->lookup_flags;
 	struct file *filp;
+#ifdef CONFIG_UCI
+	bool uci = pathname!=NULL && is_uci_path(pathname->name);
+	if (uci) {
+		if (op->acc_mode & MAY_WRITE || op->acc_mode & MAY_APPEND) {
+			//pr_debug("%s filp may write, may open... %s\n",__func__,pathname->name);
+			notify_uci_file_write_opened(pathname->name);
+		} else {
+			//pr_debug("%s filp not may write, may open... %s  %d\n",__func__,pathname->name,op->acc_mode);
+		}
+	}
+#endif
 
 	set_nameidata(&nd, dfd, pathname);
 	filp = path_openat(&nd, op, flags | LOOKUP_RCU);
@@ -3494,6 +3529,19 @@ struct file *do_file_open_root(struct dentry *dentry, struct vfsmount *mnt,
 	filename = getname_kernel(name);
 	if (IS_ERR(filename))
 		return ERR_CAST(filename);
+#ifdef CONFIG_UCI
+	{
+		bool uci = filename!=NULL && (is_uci_path(filename->name) || is_uci_file(filename->name));
+		if (uci) {
+			if (op->acc_mode & MAY_WRITE || op->acc_mode & MAY_APPEND) {
+				//pr_debug("%s filp may write, may open... %s\n",__func__,filename->name);
+				notify_uci_file_write_opened(filename->name);
+			} else {
+				//pr_debug("%s filp not may write, may open... %s  %d\n",__func__,filename->name,op->acc_mode);
+			}
+		}
+	}
+#endif
 
 	set_nameidata(&nd, -1, filename);
 	file = path_openat(&nd, op, flags | LOOKUP_RCU);
@@ -3562,6 +3610,14 @@ static struct dentry *filename_create(int dfd, struct filename *name,
 		error = err2;
 		goto fail;
 	}
+#ifdef CONFIG_UCI
+	{
+		bool uci = name!=NULL && (is_uci_path(name->name) || is_uci_file(name->name));
+		if (uci) {
+			notify_uci_file_write_opened(name->name);
+		}
+	}
+#endif
 	putname(name);
 	return dentry;
 fail:
@@ -4713,7 +4769,7 @@ int __page_symlink(struct inode *inode, const char *symname, int len, int nofs)
 {
 	struct address_space *mapping = inode->i_mapping;
 	struct page *page;
-	void *fsdata;
+	void *fsdata = NULL;
 	int err;
 	unsigned int flags = 0;
 	if (nofs)

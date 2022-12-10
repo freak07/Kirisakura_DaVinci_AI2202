@@ -78,6 +78,47 @@ static void synx_global_print_data(
 				func, i, synx_g_obj->parents[i]);
 }
 
+int synx_global_dump_shared_memory(void)
+{
+	int rc = SYNX_SUCCESS, idx;
+	unsigned long flags;
+	struct synx_global_coredata *synx_g_obj;
+
+	if (!synx_gmem.table)
+		return -SYNX_INVALID;
+
+	/* Print bitmap memory*/
+	for (idx = 0; idx < SHRD_MEM_DUMP_NUM_BMAP_WORDS; idx++) {
+		rc = synx_gmem_lock(idx, &flags);
+
+		if (rc)
+			return rc;
+
+		dprintk(SYNX_VERB, "%s: idx %d, bitmap value %d",
+		__func__, idx, synx_gmem.bitmap[idx]);
+
+		synx_gmem_unlock(idx, &flags);
+	}
+
+	/* Print table memory*/
+	for (idx = 0;
+		idx < SHRD_MEM_DUMP_NUM_BMAP_WORDS * sizeof(u32) * NUM_CHAR_BIT;
+		idx++) {
+		rc = synx_gmem_lock(idx, &flags);
+
+		if (rc)
+			return rc;
+
+		dprintk(SYNX_VERB, "%s: idx %d\n", __func__, idx);
+
+		synx_g_obj = &synx_gmem.table[idx];
+		synx_global_print_data(synx_g_obj, __func__);
+
+		synx_gmem_unlock(idx, &flags);
+	}
+	return rc;
+}
+
 static int synx_gmem_init(void)
 {
 	if (!synx_gmem.table)
@@ -165,6 +206,24 @@ int synx_global_init_coredata(u32 h_synx)
 	if (rc)
 		return rc;
 	synx_g_obj = &synx_gmem.table[idx];
+	if (synx_g_obj->status != 0 || synx_g_obj->refcount != 0 ||
+		synx_g_obj->subscribers != 0 || synx_g_obj->handle != 0 ||
+		synx_g_obj->parents[0] != 0) {
+		dprintk(SYNX_ERR,
+				"entry not cleared for idx %u,\n"
+				"synx_g_obj->status %d,\n"
+				"synx_g_obj->refcount %d,\n"
+				"synx_g_obj->subscribers %d,\n"
+				"synx_g_obj->handle %u,\n"
+				"synx_g_obj->parents[0] %d\n",
+				idx, synx_g_obj->status,
+				synx_g_obj->refcount,
+				synx_g_obj->subscribers,
+				synx_g_obj->handle,
+				synx_g_obj->parents[0]);
+		synx_gmem_unlock(idx, &flags);
+		return -SYNX_INVALID;
+	}
 	memset(synx_g_obj, 0, sizeof(*synx_g_obj));
 	/* set status to active */
 	synx_g_obj->status = SYNX_STATE_ACTIVE;
@@ -485,7 +544,18 @@ static int synx_global_update_status_core(u32 idx,
 	/* notify waiting clients on signal */
 	if (data) {
 		/* notify wait client */
-		for (i = 1; i < SYNX_CORE_MAX; i++) {
+
+	/* In case of SSR, someone might be waiting on same core
+	 * However, in other cases, synx_signal API will take care
+	 * of signaling handles on same core and thus we don't need
+	 * to send interrupt
+	 */
+		if (status == SYNX_STATE_SIGNALED_SSR)
+			i = 0;
+		else
+			i = 1;
+
+		for (; i < SYNX_CORE_MAX ; i++) {
 			if (!wait_cores[i])
 				continue;
 			dprintk(SYNX_DBG,
@@ -695,10 +765,11 @@ int synx_global_recover(enum synx_core_id core_id)
 	bool clear_idx[SYNX_GLOBAL_MAX_OBJS] = {false};
 	bool update;
 
+	dprintk(SYNX_WARN, "Subsystem restart for core_id: %d\n", core_id);
 	if (!synx_gmem.table)
 		return -SYNX_NOMEM;
 
-	ipclite_hwlock_reset(synx_global_map_core_id(core_id));
+	ipclite_recover(synx_global_map_core_id(core_id));
 
 	/* recover synx gmem lock if it was owned by core in ssr */
 	if (synx_gmem_lock_owner(0) == core_id) {

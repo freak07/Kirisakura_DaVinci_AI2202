@@ -58,8 +58,8 @@
 #define UFS_QCOM_DEFAULT_TURBO_L1_FREQ  300000000
 #define UFS_NOM_THRES_FREQ	300000000
 
-/* default value of auto suspend is 3 seconds */
-#define UFS_QCOM_AUTO_SUSPEND_DELAY	3000
+/* default value of auto suspend is 3 seconds, edit 2 seconds */
+#define UFS_QCOM_AUTO_SUSPEND_DELAY	2000
 #define UFS_QCOM_CLK_GATING_DELAY_MS_PWR_SAVE	10
 #define UFS_QCOM_CLK_GATING_DELAY_MS_PERF	50
 

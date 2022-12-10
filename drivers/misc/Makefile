@@ -69,3 +69,7 @@ obj-$(CONFIG_RT_REGMAP)		+= rt-regmap.o
 ifneq (,$(filter AI2201,$(ASUS_BUILD_PROJECT)))
 obj-y		+= audio_gm_cdev.o
 endif
+
+obj-$(CONFIG_UCI)  += uci/
+obj-$(CONFIG_UCI_NOTIFICATIONS)  += notification/
+obj-y  += inputfilter/

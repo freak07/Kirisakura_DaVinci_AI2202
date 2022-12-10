@@ -881,8 +881,9 @@ int tg_nop(struct task_group *tg, void *data)
 }
 #endif
 
-static void set_load_weight(struct task_struct *p, bool update_load)
+static void set_load_weight(struct task_struct *p)
 {
+	bool update_load = !(READ_ONCE(p->state) & TASK_NEW);
 	int prio = p->static_prio - MAX_RT_PRIO;
 	struct load_weight *load = &p->se.load;
 
@@ -2864,8 +2865,12 @@ static inline bool ttwu_queue_cond(int cpu, int wake_flags)
 	 * CPU then use the wakelist to offload the task activation to
 	 * the soon-to-be-idle CPU as the current CPU is likely busy.
 	 * nr_running is checked to avoid unnecessary task stacking.
+	 *
+	 * Note that we can only get here with (wakee) p->on_rq=0,
+	 * p->on_cpu can be whatever, we've done the dequeue, so
+	 * the wakee has been accounted out of ->nr_running.
 	 */
-	if ((wake_flags & WF_ON_CPU) && cpu_rq(cpu)->nr_running <= 1)
+	if ((wake_flags & WF_ON_CPU) && !cpu_rq(cpu)->nr_running)
 		return true;
 
 	return false;
@@ -3485,7 +3490,7 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 			p->static_prio = NICE_TO_PRIO(0);
 
 		p->prio = p->normal_prio = p->static_prio;
-		set_load_weight(p, false);
+		set_load_weight(p);
 
 		/*
 		 * We don't need the reset flag anymore after the fork. It has
@@ -5263,7 +5268,7 @@ void set_user_nice(struct task_struct *p, long nice)
 		put_prev_task(rq, p);
 
 	p->static_prio = NICE_TO_PRIO(nice);
-	set_load_weight(p, true);
+	set_load_weight(p);
 	old_prio = p->prio;
 	p->prio = effective_prio(p);
 
@@ -5437,7 +5442,7 @@ static void __setscheduler_params(struct task_struct *p,
 	 */
 	p->rt_priority = attr->sched_priority;
 	p->normal_prio = normal_prio(p);
-	set_load_weight(p, true);
+	set_load_weight(p);
 }
 
 /*
@@ -5450,14 +5455,14 @@ static bool check_same_owner(struct task_struct *p)
 
     //printk("TGPA- check_same_owner %s, %s", p->comm, current->comm);
     // glory of king
-    if(!strcmp(p->comm, "UnityMain") && !strncmp("Thread-", current->comm, 7))
-        return true;
+    {if(!strcmp(p->comm, "UnityMain") && !strncmp("Thread-", current->comm, 7)){
+        return true;}}
     //pubg
-    if(!strncmp(p->comm, "Thread-", 7) && !strncmp("Thread-", current->comm, 7))
-        return true;
+    {if(!strncmp(p->comm, "Thread-", 7) && !strncmp("Thread-", current->comm, 7)){
+        return true;}}
     //peace elite
-    if(!strncmp(p->comm, "RenderThread", strlen("RenderThread")) && !strncmp("Thread-", current->comm, 7))
-        return true;
+    {if(!strncmp(p->comm, "RenderThread", strlen("RenderThread")) && !strncmp("Thread-", current->comm, 7)){
+        return true;}}
 
 	rcu_read_lock();
 	pcred = __task_cred(p);
@@ -7591,7 +7596,7 @@ void __init sched_init(void)
 		atomic_set(&rq->nr_iowait, 0);
 	}
 
-	set_load_weight(&init_task, false);
+	set_load_weight(&init_task);
 
 	/*
 	 * The boot idle thread does lazy MMU switching as well:

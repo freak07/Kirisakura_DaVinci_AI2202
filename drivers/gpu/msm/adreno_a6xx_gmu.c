@@ -2690,6 +2690,7 @@ static int gmu_cx_gdsc_event(struct notifier_block *nb,
 		!(val & BIT(31)), 100, 100 * 1000))
 		dev_err(device->dev, "GPU CX wait timeout.\n");
 
+	clear_bit(GMU_PRIV_CX_GDSC_WAIT, &gmu->flags);
 	complete_all(&gmu->gdsc_gate);
 
 	return 0;

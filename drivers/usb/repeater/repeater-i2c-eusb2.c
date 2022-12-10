@@ -360,6 +360,7 @@ static int eusb2_repeater_init(struct usb_repeater *ur)
 
 	if (usb_current_role == USB_ROLE_HOST) {
 		dev_info(er->ur.dev, "[eusb2_repeater] hardcode override host params\n", __func__);
+		eusb2_i2c_write_reg(er, USB2_TX_CONTROL1, 0x02); //0x07
 		eusb2_i2c_write_reg(er, USB2_TX_CONTROL2, 0x62); //0x08
 	}
 

@@ -3807,8 +3807,9 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	if (error)
 		dev_info(&client->dev, "No pinctrl support\n");
 
+	/* Request the RESET line as asserted so we go into reset */
 	data->reset_gpio = devm_gpiod_get_optional(&client->dev,
-						"reset", GPIOD_OUT_LOW);
+						   "reset", GPIOD_OUT_HIGH);
 	data->irq_gpio = devm_gpiod_get_optional(&client->dev,
 						"irq", GPIOD_IN);
 	if (IS_ERR(data->reset_gpio)) {
@@ -3844,8 +3845,9 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	if (data->reset_gpio) {
 		gpiod_set_value(data->reset_gpio, 0);
+		/* Wait a while and then de-assert the RESET GPIO line */
 		msleep(MXT_RESET_GPIO_TIME);
-		gpiod_set_value(data->reset_gpio, 1);
+		gpiod_set_value(data->reset_gpio, 0);
 		msleep(MXT_RESET_INVALID_CHG);
 	}
 
