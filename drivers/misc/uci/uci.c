@@ -759,11 +759,11 @@ EXPORT_SYMBOL(uci_add_call_handler);
 
 #ifdef EMPTY_CALLBACKS_TORCH
 // torch
-void qpnp_torch_main(int led0, int led1) {
+void qpnp_torch_main2(int led0, int led1) {
 	int p[] = {led0,led1};
 	uci_exec_call_handlers("torch_main", p, NULL);
 }
-EXPORT_SYMBOL(qpnp_torch_main);
+EXPORT_SYMBOL(qpnp_torch_main2);
 #endif
 
 #ifdef EMPTY_CALLBACKS_LED_FRONT
