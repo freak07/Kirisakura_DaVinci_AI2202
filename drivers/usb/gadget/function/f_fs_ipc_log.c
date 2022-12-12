@@ -927,7 +927,7 @@ static int entry_acc_start_work(struct kretprobe_instance *ri,
 	return 0;
 }
 
-entry_misc_register(struct kretprobe_instance *ri,
+int entry_misc_register(struct kretprobe_instance *ri,
 				   struct pt_regs *regs){
 
 	struct kprobe_data *data = (struct kprobe_data *)ri->data;
@@ -938,7 +938,7 @@ entry_misc_register(struct kretprobe_instance *ri,
 	return 0;
 }
 
-exit_misc_register(struct kretprobe_instance *ri,
+int exit_misc_register(struct kretprobe_instance *ri,
 				   struct pt_regs *regs){
 
 	struct kprobe_data *data = (struct kprobe_data *)ri->data;

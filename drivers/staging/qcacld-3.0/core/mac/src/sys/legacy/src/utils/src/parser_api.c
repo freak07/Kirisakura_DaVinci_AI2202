@@ -59,6 +59,8 @@
 #include "wlan_twt_cfg_ext_api.h"
 #endif
 
+//#pragma clang diagnostic ignored "-Warray-parameter"
+
 #define RSN_OUI_SIZE 4
 /* ////////////////////////////////////////////////////////////////////// */
 void swap_bit_field16(uint16_t in, uint16_t *out)

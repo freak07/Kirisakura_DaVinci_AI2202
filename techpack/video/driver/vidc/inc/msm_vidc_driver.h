@@ -14,6 +14,10 @@
 #include "msm_vidc_inst.h"
 #include "msm_vidc_platform.h"
 
+
+#pragma clang diagnostic ignored "-Wimplicit-int"
+
+
 #define MSM_VIDC_SESSION_INACTIVE_THRESHOLD_MS 1000
 #define HEIC_GRID_DIMENSION 512
 

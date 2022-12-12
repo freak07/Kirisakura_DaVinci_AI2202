@@ -37,6 +37,7 @@
 #include "ipa_trace.h"
 #include "ipa_odl.h"
 
+#pragma clang diagnostic ignored "-Wenum-conversion"
 
 #define OUTSTANDING_HIGH_DEFAULT 256
 #define OUTSTANDING_HIGH_CTL_DEFAULT (OUTSTANDING_HIGH_DEFAULT + 32)

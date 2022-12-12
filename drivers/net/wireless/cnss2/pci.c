@@ -1569,7 +1569,7 @@ static int cnss_pci_check_mhi_state_bit(struct cnss_pci_data *pci_priv,
 	return -EINVAL;
 }
 
-static cnss_rddm_trigger_debug(struct cnss_pci_data *pci_priv)
+static int cnss_rddm_trigger_debug(struct cnss_pci_data *pci_priv)
 {
 	int read_val, ret;
 
@@ -1597,7 +1597,7 @@ static cnss_rddm_trigger_debug(struct cnss_pci_data *pci_priv)
 	return ret;
 }
 
-static cnss_rddm_trigger_check(struct cnss_pci_data *pci_priv)
+static int cnss_rddm_trigger_check(struct cnss_pci_data *pci_priv)
 {
 	int read_val, ret;
 	u32 pbl_stage, sbl_log_start, sbl_log_size, pbl_wlan_boot_cfg;
