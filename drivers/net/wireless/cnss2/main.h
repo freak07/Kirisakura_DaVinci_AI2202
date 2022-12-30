@@ -311,6 +311,7 @@ enum cnss_driver_state {
 	CNSS_DAEMON_CONNECTED,
 	CNSS_PCI_PROBE_DONE,
 	CNSS_DRIVER_REGISTER,
+	CNSS_FS_READY,
 };
 
 struct cnss_recovery_data {
@@ -522,6 +523,7 @@ struct cnss_plat_data {
 	u8 set_wlaon_pwr_ctrl;
 	struct cnss_tcs_info tcs_info;
 	bool fw_pcie_gen_switch;
+	u64 fw_caps;
 	u8 pcie_gen_speed;
 	struct cnss_dms_data dms;
 	int power_up_error;

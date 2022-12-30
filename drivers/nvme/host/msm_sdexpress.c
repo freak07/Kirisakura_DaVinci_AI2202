@@ -5,6 +5,15 @@
 
 #include "msm_sdexpress.h"
 
+static void msm_sdexpress_kobj_release(struct kobject *kobj)
+{
+	kobject_put(kobj);
+}
+
+static struct kobj_type msm_sdexpress_ktype = {
+	.release = msm_sdexpress_kobj_release,
+};
+
 static int msm_sdexpress_vreg_set_voltage(struct msm_sdexpress_reg_data *vreg,
 					int min_uV, int max_uV)
 {
@@ -82,6 +91,7 @@ static int msm_sdexpress_vreg_disable(struct msm_sdexpress_reg_data *vreg)
 					__func__, vreg->name, ret);
 			return ret;
 		}
+		vreg->is_enabled = false;
 
 		/* Set min. voltage level to 0 */
 		return msm_sdexpress_vreg_set_voltage(vreg, 0, vreg->high_vol_level);
@@ -125,7 +135,7 @@ static void msm_sdexpress_deenumerate_card(struct msm_sdexpress_info *info)
 
 static void msm_sdexpress_enumerate_card(struct msm_sdexpress_info *info)
 {
-	int rc;
+	int rc, retry_count = 0;
 	unsigned long timeout;
 	struct msm_sdexpress_reg_data *vreg;
 
@@ -143,7 +153,7 @@ static void msm_sdexpress_enumerate_card(struct msm_sdexpress_info *info)
 	 * CMD (pull up to be provided on PCB)
 	 * CLKREQ
 	 */
-
+retry:
 	/* Enable vdd1 regulator */
 	vreg = info->vreg_data->vdd1_data;
 	rc = msm_sdexpress_setup_vreg(info, vreg, true);
@@ -160,7 +170,7 @@ static void msm_sdexpress_enumerate_card(struct msm_sdexpress_info *info)
 	 * board-level hardware. So go ahead and enable VDD2
 	 */
 
-	usleep_range(500, 600);
+	udelay(1000);
 	vreg = info->vreg_data->vdd2_data;
 	rc = msm_sdexpress_setup_vreg(info, vreg, true);
 	if (rc) {
@@ -179,6 +189,8 @@ static void msm_sdexpress_enumerate_card(struct msm_sdexpress_info *info)
 		if (time_after(jiffies, timeout)) {
 			pr_err("%s: CLKREQ is not going low. Wrong card may be inserted ?\n",
 					__func__);
+			/* notify userspace that an incompatible card is inserted */
+			kobject_uevent(&info->kobj, KOBJ_CHANGE);
 			rc = -ENODEV;
 			goto disable_vdd2;
 		}
@@ -187,9 +199,26 @@ static void msm_sdexpress_enumerate_card(struct msm_sdexpress_info *info)
 	if (!rc)
 		rc = msm_pcie_enumerate(info->pci_nvme_instance);
 
-	if (!rc)
+	/*
+	 * sometimes on few platforms, pcie enumerate may fail on first call.
+	 * As there is no harm for a retry, go for it.
+	 */
+	if (rc) {
+		while (retry_count++ < PCIE_ENUMERATE_RETRY) {
+			vreg = info->vreg_data->vdd1_data;
+			msm_sdexpress_vreg_disable(vreg);
+
+			vreg = info->vreg_data->vdd2_data;
+			msm_sdexpress_vreg_disable(vreg);
+			mdelay(5);
+			goto retry;
+		}
+	}
+
+	if (!rc) {
 		pr_info("%s: Card enumerated successfully\n", __func__);
-	return;
+		return;
+	}
 
 disable_vdd2:
 	vreg = info->vreg_data->vdd2_data;
@@ -205,7 +234,7 @@ static void msm_sdexpress_detect_change(struct work_struct *work)
 {
 	struct msm_sdexpress_info *info;
 
-	info = container_of(work, struct msm_sdexpress_info, sdex_work);
+	info = container_of(to_delayed_work(work), struct msm_sdexpress_info, sdex_work);
 	pr_debug("%s Enter. trigger event:%d cd gpio:%d clkreq gpio:%d\n", __func__,
 			atomic_read(&info->trigger_card_event),
 			gpiod_get_value(info->sdexpress_gpio->gpio),
@@ -224,7 +253,8 @@ static irqreturn_t msm_sdexpress_gpio_cd_irqt(int irq, void *dev_id)
 
 	atomic_set(&info->trigger_card_event, 1);
 
-	queue_work(info->sdexpress_wq, &info->sdex_work);
+	queue_delayed_work(info->sdexpress_wq, &info->sdex_work,
+		msecs_to_jiffies(info->sdexpress_gpio->cd_debounce_delay_ms));
 	return IRQ_HANDLED;
 }
 
@@ -405,7 +435,6 @@ static int msm_sdexpress_parse_cd_gpio(struct device *dev,
 	if (rc < 0) {
 		dev_warn(dev, "%s unable to set debounce for cd gpio desc (%d)\n",
 				__func__, rc);
-		info->sdexpress_gpio->cd_debounce_delay_ms = 0;
 		rc = 0;
 	}
 
@@ -592,7 +621,7 @@ static int msm_sdexpress_probe(struct platform_device *pdev)
 		goto out;
 	}
 
-	INIT_WORK(&info->sdex_work, msm_sdexpress_detect_change);
+	INIT_DELAYED_WORK(&info->sdex_work, msm_sdexpress_detect_change);
 
 	/* Parse platform data */
 	ret = msm_sdexpress_populate_pdata(dev, info);
@@ -622,11 +651,29 @@ static int msm_sdexpress_probe(struct platform_device *pdev)
 	/* Queue a work-item for card presence from bootup */
 	atomic_set(&info->trigger_card_event, 0);
 	if (!gpiod_get_value(info->sdexpress_gpio->gpio))
-		queue_work(info->sdexpress_wq, &info->sdex_work);
+		queue_delayed_work(info->sdexpress_wq, &info->sdex_work,
+			msecs_to_jiffies(SDEXPRESS_PROBE_DELAYED_PERIOD));
+
+	/* Initialize and register a kobject with the kobject core */
+	kobject_init(&info->kobj, &msm_sdexpress_ktype);
+	ret = kobject_add(&info->kobj, &dev->kobj, "%s", "sdexpress");
+	if (ret) {
+		dev_err(&pdev->dev, "Failed to add kobject (%d)\n", ret);
+		goto kput;
+	}
+
+	/* announce that kobject has been created */
+	ret = kobject_uevent(&info->kobj, KOBJ_ADD);
+	if (ret) {
+		dev_err(&pdev->dev, "Failed to sent uevent (%d)\n", ret);
+		goto kput;
+	}
 
 	pr_info("%s: probe successful\n", __func__);
 	return ret;
 
+kput:
+	kobject_put(&info->kobj);
 err:
 	if (info->sdexpress_wq)
 		destroy_workqueue(info->sdexpress_wq);

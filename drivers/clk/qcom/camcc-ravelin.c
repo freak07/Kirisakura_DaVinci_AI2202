@@ -43,7 +43,7 @@ enum {
 };
 
 static const struct pll_vco lucid_evo_vco[] = {
-	{ 249600000, 2000000000, 0 },
+	{ 249600000, 2020000000, 0 },
 };
 
 static const struct pll_vco rivian_evo_vco[] = {
@@ -85,7 +85,7 @@ static struct clk_alpha_pll cam_cc_pll0 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -171,7 +171,7 @@ static struct clk_alpha_pll cam_cc_pll1 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -208,7 +208,7 @@ static const struct alpha_pll_config cam_cc_pll2_config = {
 	.config_ctl_hi_val = 0x00890263,
 	.config_ctl_hi1_val = 0x00000247,
 	.user_ctl_val = 0x00000401,
-	.user_ctl_hi_val = 0x00000000,
+	.user_ctl_hi_val = 0x00400000,
 };
 
 static struct clk_alpha_pll cam_cc_pll2 = {
@@ -292,7 +292,7 @@ static struct clk_alpha_pll cam_cc_pll3 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -355,7 +355,7 @@ static struct clk_alpha_pll cam_cc_pll4 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -810,8 +810,8 @@ static struct clk_rcg2 cam_cc_icp_clk_src = {
 };
 
 static const struct freq_tbl ftbl_cam_cc_mclk0_clk_src[] = {
-	F(19200000, P_CAM_CC_PLL2_OUT_EVEN, 2, 2, 25),
-	F(24000000, P_CAM_CC_PLL2_OUT_EVEN, 2, 1, 10),
+	F(19200000, P_CAM_CC_PLL2_OUT_MAIN, 1, 1, 50),
+	F(24000000, P_CAM_CC_PLL2_OUT_MAIN, 10, 1, 4),
 	F(64000000, P_CAM_CC_PLL2_OUT_MAIN, 15, 0, 0),
 	{ }
 };
@@ -984,7 +984,7 @@ static struct clk_rcg2 cam_cc_tfe_0_clk_src = {
 		.name = "cam_cc_tfe_0_clk_src",
 		.parent_data = cam_cc_parent_data_3,
 		.num_parents = ARRAY_SIZE(cam_cc_parent_data_3),
-		.flags = CLK_SET_RATE_PARENT,
+		.flags = CLK_SET_RATE_PARENT | CLK_GET_RATE_NOCACHE,
 		.ops = &clk_rcg2_ops,
 	},
 	.clkr.vdd_data = {
@@ -1033,7 +1033,7 @@ static struct clk_rcg2 cam_cc_tfe_1_clk_src = {
 		.name = "cam_cc_tfe_1_clk_src",
 		.parent_data = cam_cc_parent_data_3,
 		.num_parents = ARRAY_SIZE(cam_cc_parent_data_3),
-		.flags = CLK_SET_RATE_PARENT,
+		.flags = CLK_SET_RATE_PARENT | CLK_GET_RATE_NOCACHE,
 		.ops = &clk_rcg2_ops,
 	},
 	.clkr.vdd_data = {

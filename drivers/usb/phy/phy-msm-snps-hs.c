@@ -91,6 +91,9 @@
 #define TXVREFTUNE0_MASK			0xF
 #define PARAM_OVRD_MASK			0xFF
 
+#define USB2_PHY_USB_PHY_PWRDOWN_CTRL		(0xa4)
+#define PWRDOWN_B				BIT(0)
+
 #define DPSE_INTR_HIGH			BIT(0)
 
 #define USB_HSPHY_3P3_VOL_MIN			3050000 /* uV */
@@ -140,6 +143,7 @@ struct msm_hsphy {
 	struct regulator        *refgen;
 	int			vdd_levels[3]; /* none, low, high */
 	int			refgen_levels[3]; /* 0, REFGEN_VOL_MIN, REFGEN_VOL_MAX */
+	int			vdda18_max_uA;
 
 	bool			clocks_enabled;
 	bool			power_enabled;
@@ -246,7 +250,7 @@ static int msm_hsphy_enable_power(struct msm_hsphy *phy, bool on)
 		goto unconfig_vdd;
 	}
 
-	ret = regulator_set_load(phy->vdda18, USB_HSPHY_1P8_HPM_LOAD);
+	ret = regulator_set_load(phy->vdda18, phy->vdda18_max_uA);
 	if (ret < 0) {
 		dev_err(phy->phy.dev, "Unable to set HPM of vdda18:%d\n", ret);
 		goto disable_vdd;
@@ -456,7 +460,21 @@ static int msm_hsphy_init(struct usb_phy *uphy)
 				qcom_scm_io_writel(phy->eud_reg, 0x0);
 				phy->re_enable_eud = true;
 			} else {
+				msm_hsphy_enable_clocks(phy, true);
 				ret = msm_hsphy_enable_power(phy, true);
+				/* On some targets 3.3V LDO which acts as EUD power
+				 * up (which in turn reset the USB PHY) is shared
+				 * with EMMC so that it won't be turned off even
+				 * though we remove our vote as part of disconnect
+				 * so power up this regulator is actually not
+				 * resetting the PHY next time when cable is
+				 * connected. So we explicitly bring
+				 * it out of power down state by writing
+				 * to POWER DOWN register,powering on the EUD
+				 * will bring EUD as well as phy out of reset state.
+				 */
+				msm_usb_write_readback(phy->base,
+					USB2_PHY_USB_PHY_PWRDOWN_CTRL, PWRDOWN_B, 1);
 				return ret;
 			}
 		}
@@ -783,6 +801,7 @@ static int msm_hsphy_dpdm_regulator_enable(struct regulator_dev *rdev)
 
 	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg)) {
 		dev_err(phy->phy.dev, "eud is enabled\n");
+		phy->dpdm_enable = true;
 		return 0;
 	}
 
@@ -813,11 +832,20 @@ static int msm_hsphy_dpdm_regulator_enable(struct regulator_dev *rdev)
 
 static int msm_hsphy_dpdm_regulator_disable(struct regulator_dev *rdev)
 {
-	int ret = 0;
+	int ret = 0, val = 0;
 	struct msm_hsphy *phy = rdev_get_drvdata(rdev);
 
 	dev_dbg(phy->phy.dev, "%s dpdm_enable:%d\n",
 				__func__, phy->dpdm_enable);
+
+	if (phy->eud_enable_reg) {
+		val = readl_relaxed(phy->eud_enable_reg);
+		if (val & EUD_EN2) {
+			dev_err(phy->phy.dev, "eud is enabled\n");
+			phy->dpdm_enable = false;
+			return 0;
+		}
+	}
 
 	mutex_lock(&phy->phy_lock);
 	if (phy->dpdm_enable) {
@@ -1476,6 +1504,18 @@ static int msm_hsphy_probe(struct platform_device *pdev)
 		}
 	}
 
+	     /*
+	      * Some targets use PMOS LDOs, while others use NMOS LDOs,
+	      * but there is no support for NMOS LDOs whose load current threshold
+	      * for entering HPM is 30mA, which is greater than 19mA.
+	      * As a result of this property being passed in dt, the value of
+	      * USB_HSPHY_1P8_HPM_LOAD will be modified to meet the requirements.
+	      */
+
+	if (of_property_read_s32(dev->of_node, "qcom,vdd18-max-load-uA",
+			&phy->vdda18_max_uA) || !phy->vdda18_max_uA)
+		phy->vdda18_max_uA = USB_HSPHY_1P8_HPM_LOAD;
+
 	ret = of_property_read_u32_array(dev->of_node, "qcom,vdd-voltage-level",
 					 (u32 *) phy->vdd_levels,
 					 ARRAY_SIZE(phy->vdd_levels));
@@ -1546,8 +1586,11 @@ static int msm_hsphy_probe(struct platform_device *pdev)
 	 * kernel boot till USB phy driver is initialized based on cable status,
 	 * keep LDOs on here.
 	 */
-	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg))
+	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg)) {
+		msm_hsphy_enable_clocks(phy, true);
 		msm_hsphy_enable_power(phy, true);
+	}
+
 	return 0;
 
 err_ret:

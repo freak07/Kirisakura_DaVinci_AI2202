@@ -11,6 +11,7 @@
 
 #define CNSS_MAX_FILE_NAME		20
 #define CNSS_MAX_TIMESTAMP_LEN		32
+#define CNSS_WLFW_MAX_BUILD_ID_LEN      128
 #define CNSS_MAX_DEV_MEM_NUM		4
 #define CNSS_CHIP_VER_ANY		0
 
@@ -75,6 +76,7 @@ struct cnss_soc_info {
 	char fw_build_timestamp[CNSS_MAX_TIMESTAMP_LEN + 1];
 	struct cnss_device_version device_version;
 	struct cnss_dev_mem_info dev_mem_info[CNSS_MAX_DEV_MEM_NUM];
+	char fw_build_id[CNSS_WLFW_MAX_BUILD_ID_LEN + 1];
 };
 
 struct cnss_wlan_runtime_ops {
@@ -96,6 +98,15 @@ enum cnss_bus_event_type {
 	BUS_EVENT_PCI_LINK_DOWN = 0,
 
 	BUS_EVENT_INVALID = 0xFFFF,
+};
+
+enum cnss_wfc_mode {
+	CNSS_WFC_MODE_OFF,
+	CNSS_WFC_MODE_ON,
+};
+
+struct cnss_wfc_cfg {
+	enum cnss_wfc_mode mode;
 };
 
 struct cnss_hang_event {
@@ -204,6 +215,10 @@ enum cnss_recovery_reason {
 	CNSS_REASON_TIMEOUT,
 };
 
+enum cnss_fw_caps {
+	CNSS_FW_CAP_DIRECT_LINK_SUPPORT,
+};
+
 enum cnss_remote_mem_type {
 	CNSS_REMOTE_MEM_TYPE_FW,
 	CNSS_REMOTE_MEM_TYPE_QDSS,
@@ -293,4 +308,6 @@ extern int cnss_get_mem_segment_info(enum cnss_remote_mem_type type,
 extern int cnss_get_pci_slot(struct device *dev);
 extern int cnss_pci_get_reg_dump(struct device *dev, uint8_t *buffer,
 				 uint32_t len);
+extern bool cnss_get_fw_cap(struct device *dev, enum cnss_fw_caps fw_cap);
+extern int cnss_set_wfc_mode(struct device *dev, struct cnss_wfc_cfg cfg);
 #endif /* _NET_CNSS2_H */

@@ -298,6 +298,39 @@ int cnss_get_platform_cap(struct device *dev, struct cnss_platform_cap *cap)
 }
 EXPORT_SYMBOL(cnss_get_platform_cap);
 
+/**
+ * cnss_get_fw_cap - Check whether FW supports specific capability or not
+ * @dev: Device
+ * @fw_cap: FW Capability which needs to be checked
+ *
+ * Return: TRUE if supported, FALSE on failure or if not supported
+ */
+bool cnss_get_fw_cap(struct device *dev, enum cnss_fw_caps fw_cap)
+{
+	struct cnss_plat_data *plat_priv = cnss_bus_dev_to_plat_priv(dev);
+	bool ret = false;
+
+	if (!plat_priv)
+		return ret;
+
+	if (!plat_priv->fw_caps)
+		return ret;
+
+	switch (fw_cap) {
+	case CNSS_FW_CAP_DIRECT_LINK_SUPPORT:
+		ret = !!(plat_priv->fw_caps &
+			 QMI_WLFW_DIRECT_LINK_SUPPORT_V01);
+		break;
+	default:
+		cnss_pr_err("Invalid FW Capability: 0x%x\n", fw_cap);
+	}
+
+	cnss_pr_dbg("FW Capability 0x%x is %s\n", fw_cap,
+		    ret ? "supported" : "not supported");
+	return ret;
+}
+EXPORT_SYMBOL(cnss_get_fw_cap);
+
 void cnss_request_pm_qos(struct device *dev, u32 qos_val)
 {
 	struct cnss_plat_data *plat_priv = cnss_bus_dev_to_plat_priv(dev);
@@ -3169,6 +3202,8 @@ static ssize_t fs_ready_store(struct device *dev,
 		return count;
 	}
 
+	set_bit(CNSS_FS_READY, &plat_priv->driver_state);
+
 	if (test_bit(QMI_BYPASS, &plat_priv->ctrl_params.quirks)) {
 		cnss_pr_dbg("QMI is bypassed\n");
 		return count;
@@ -3187,11 +3222,17 @@ static ssize_t fs_ready_store(struct device *dev,
 		return count;
 	}
 
-	if (fs_ready == FILE_SYSTEM_READY && plat_priv->cbc_enabled)
+	if (fs_ready == FILE_SYSTEM_READY && plat_priv->cbc_enabled) {
 		cnss_driver_event_post(plat_priv,
 				       CNSS_DRIVER_EVENT_COLD_BOOT_CAL_START,
 				       0, NULL);
 
+	} else if (test_bit(CNSS_DRIVER_REGISTER, &plat_priv->driver_state)) {
+		cnss_pr_dbg("Schedule WLAN driver load from FS Ready\n");
+		if (cancel_delayed_work_sync(&plat_priv->wlan_reg_driver_work))
+			schedule_delayed_work(&plat_priv->wlan_reg_driver_work,
+					      0);
+	}
 	return count;
 }
 
@@ -3546,6 +3587,26 @@ cnss_use_nv_mac(struct cnss_plat_data *plat_priv)
 	return of_property_read_bool(plat_priv->plat_dev->dev.of_node,
 				     "use-nv-mac");
 }
+
+int cnss_set_wfc_mode(struct device *dev, struct cnss_wfc_cfg cfg)
+{
+	struct cnss_plat_data *plat_priv = cnss_bus_dev_to_plat_priv(dev);
+	int ret = 0;
+
+	if (!plat_priv)
+		return -ENODEV;
+
+	/* If IMS server is connected, return success without QMI send */
+	if (test_bit(CNSS_IMS_CONNECTED, &plat_priv->driver_state)) {
+		cnss_pr_dbg("Ignore host request as IMS server is connected");
+		return ret;
+	}
+
+	ret = cnss_wlfw_send_host_wfc_call_status(plat_priv, cfg);
+
+	return ret;
+}
+EXPORT_SYMBOL(cnss_set_wfc_mode);
 
 static int cnss_probe(struct platform_device *plat_dev)
 {

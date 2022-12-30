@@ -64,7 +64,7 @@ enum mon_type {
 	NUM_MON_TYPES
 };
 
-#define SAMPLING_VOTER	(num_possible_cpus())
+#define SAMPLING_VOTER	max(num_possible_cpus(), 8U)
 #define NUM_FP_VOTERS	(SAMPLING_VOTER + 1)
 
 enum memlat_type {
@@ -1539,8 +1539,8 @@ int cpucp_memlat_init(struct scmi_device *sdev)
 		return -EINVAL;
 
 	ops = sdev->handle->devm_get_protocol(sdev, SCMI_PROTOCOL_MEMLAT, &ph);
-	if (!ops)
-		return -ENODEV;
+	if (IS_ERR(ops))
+		return PTR_ERR(ops);
 
 	mutex_lock(&memlat_lock);
 	memlat_data->ph = ph;

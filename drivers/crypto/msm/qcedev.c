@@ -37,8 +37,20 @@
 #define CACHE_LINE_SIZE 64
 #define CE_SHA_BLOCK_SIZE SHA256_BLOCK_SIZE
 #define MAX_CEHW_REQ_TRANSFER_SIZE (128*32*1024)
-/* Max wait time once a crypt o request is done */
-#define MAX_CRYPTO_WAIT_TIME 1500
+/*
+ * Max wait time once a crypto request is done.
+ * Assuming 5ms per crypto operation, this is calculated for
+ * the scenario of having 3 offload reqs + 1 tz req + buffer.
+ */
+#define MAX_CRYPTO_WAIT_TIME 25
+
+#define MAX_REQUEST_TIME 5000
+
+enum qcedev_req_status {
+	QCEDEV_REQ_CURRENT = 0,
+	QCEDEV_REQ_WAITING = 1,
+	QCEDEV_REQ_SUBMITTED = 2,
+};
 
 static uint8_t  _std_init_vector_sha1_uint8[] =   {
 	0x67, 0x45, 0x23, 0x01, 0xEF, 0xCD, 0xAB, 0x89,
@@ -179,10 +191,23 @@ static void qcedev_ce_high_bw_req(struct qcedev_control *podev,
 			ret = qcedev_control_clocks(podev, true);
 			if (ret)
 				goto exit_unlock_mutex;
+			ret = qce_set_irqs(podev->qce, true);
+			if (ret) {
+				pr_err("%s: could not enable bam irqs, ret = %d\n",
+						__func__, ret);
+				qcedev_control_clocks(podev, false);
+				goto exit_unlock_mutex;
+			}
 		}
 		podev->high_bw_req_count++;
 	} else {
 		if (podev->high_bw_req_count == 1) {
+			ret = qce_set_irqs(podev->qce, false);
+			if (ret) {
+				pr_err("%s: could not disable bam irqs, ret = %d\n",
+						__func__, ret);
+				goto exit_unlock_mutex;
+			}
 			ret = qcedev_control_clocks(podev, false);
 			if (ret)
 				goto exit_unlock_mutex;
@@ -303,42 +328,24 @@ static void req_done(unsigned long data)
 	struct qcedev_async_req *areq;
 	unsigned long flags = 0;
 	struct qcedev_async_req *new_req = NULL;
-	int ret = 0;
-	int current_req_info = 0;
 
 	spin_lock_irqsave(&podev->lock, flags);
 	areq = podev->active_command;
 	podev->active_command = NULL;
 
-again:
+	if (areq && !areq->timed_out)
+		complete(&areq->complete);
+
+	/* Look through queued requests and wake up the corresponding thread */
 	if (!list_empty(&podev->ready_commands)) {
 		new_req = container_of(podev->ready_commands.next,
 						struct qcedev_async_req, list);
 		list_del(&new_req->list);
-		podev->active_command = new_req;
-		new_req->err = 0;
-		if (new_req->op_type == QCEDEV_CRYPTO_OPER_CIPHER)
-			ret = start_cipher_req(podev, &current_req_info);
-		else if (new_req->op_type == QCEDEV_CRYPTO_OPER_OFFLOAD_CIPHER)
-			ret = start_offload_cipher_req(podev, &current_req_info);
-		else
-			ret = start_sha_req(podev, &current_req_info);
+		new_req->state = QCEDEV_REQ_CURRENT;
+		wake_up_interruptible(&new_req->wait_q);
 	}
 
 	spin_unlock_irqrestore(&podev->lock, flags);
-
-	if (areq)
-		complete(&areq->complete);
-
-	if (new_req && ret) {
-		complete(&new_req->complete);
-		spin_lock_irqsave(&podev->lock, flags);
-		podev->active_command = NULL;
-		areq = NULL;
-		ret = 0;
-		new_req = NULL;
-		goto again;
-	}
 }
 
 void qcedev_sha_req_cb(void *cookie, unsigned char *digest,
@@ -400,6 +407,7 @@ static int start_cipher_req(struct qcedev_control *podev,
 	struct qce_req creq;
 	int ret = 0;
 
+	memset(&creq, 0, sizeof(creq));
 	/* start the command on the podev->active_command */
 	qcedev_areq = podev->active_command;
 	qcedev_areq->cipher_req.cookie = qcedev_areq->handle;
@@ -453,6 +461,7 @@ static int start_cipher_req(struct qcedev_control *podev,
 
 	creq.iv = &qcedev_areq->cipher_op_req.iv[0];
 	creq.ivsize = qcedev_areq->cipher_op_req.ivlen;
+	creq.iv_ctr_size = 0;
 
 	creq.enckey =  &qcedev_areq->cipher_op_req.enckey[0];
 	creq.encklen = qcedev_areq->cipher_op_req.encklen;
@@ -487,7 +496,7 @@ static int start_cipher_req(struct qcedev_control *podev,
 	creq.qce_cb = qcedev_cipher_req_cb;
 	creq.areq = (void *)&qcedev_areq->cipher_req;
 	creq.flags = 0;
-	creq.offload_op = 0;
+	creq.offload_op = QCE_OFFLOAD_NONE;
 	ret = qce_ablk_cipher_req(podev->qce, &creq);
 	*current_req_info = creq.current_req_info;
 unsupported:
@@ -744,29 +753,73 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 	int current_req_info = 0;
 	int wait = MAX_CRYPTO_WAIT_TIME;
 	bool print_sts = false;
+	struct qcedev_async_req *new_req = NULL;
 
 	qcedev_areq->err = 0;
 	podev = handle->cntl;
+	init_waitqueue_head(&qcedev_areq->wait_q);
+
 
 	spin_lock_irqsave(&podev->lock, flags);
 
-	if (podev->active_command == NULL) {
-		podev->active_command = qcedev_areq;
-		if (qcedev_areq->op_type == QCEDEV_CRYPTO_OPER_CIPHER)
-			ret = start_cipher_req(podev, &current_req_info);
-		else if (qcedev_areq->op_type == QCEDEV_CRYPTO_OPER_OFFLOAD_CIPHER)
-			ret = start_offload_cipher_req(podev, &current_req_info);
-		else
-			ret = start_sha_req(podev, &current_req_info);
-	} else {
-		list_add_tail(&qcedev_areq->list, &podev->ready_commands);
-	}
+	/*
+	 * Service only one crypto request at a time.
+	 * Any other new requests are queued in ready_commands and woken up
+	 * only when the active command has finished successfully or when the
+	 * request times out or when the command failed when setting up.
+	 */
+	do {
+		if (podev->active_command == NULL) {
+			podev->active_command = qcedev_areq;
+			qcedev_areq->state = QCEDEV_REQ_SUBMITTED;
+			switch (qcedev_areq->op_type) {
+			case QCEDEV_CRYPTO_OPER_CIPHER:
+				ret = start_cipher_req(podev,
+						&current_req_info);
+				break;
+			case QCEDEV_CRYPTO_OPER_OFFLOAD_CIPHER:
+				ret = start_offload_cipher_req(podev,
+						&current_req_info);
+				break;
+			default:
 
-	if (ret != 0)
+				ret = start_sha_req(podev,
+						&current_req_info);
+				break;
+			}
+		} else {
+			list_add_tail(&qcedev_areq->list,
+					&podev->ready_commands);
+			qcedev_areq->state = QCEDEV_REQ_WAITING;
+			if (wait_event_interruptible_lock_irq_timeout(
+				qcedev_areq->wait_q,
+				(qcedev_areq->state == QCEDEV_REQ_CURRENT),
+				podev->lock,
+				msecs_to_jiffies(MAX_REQUEST_TIME)) == 0) {
+				pr_err("%s: request timed out\n", __func__);
+				return qcedev_areq->err;
+			}
+		}
+	} while (qcedev_areq->state != QCEDEV_REQ_SUBMITTED);
+
+	if (ret != 0) {
 		podev->active_command = NULL;
+		/*
+		 * Look through queued requests and wake up the corresponding
+		 * thread.
+		 */
+		if (!list_empty(&podev->ready_commands)) {
+			new_req = container_of(podev->ready_commands.next,
+						struct qcedev_async_req, list);
+			list_del(&new_req->list);
+			new_req->state = QCEDEV_REQ_CURRENT;
+			wake_up_interruptible(&new_req->wait_q);
+		}
+	}
 
 	spin_unlock_irqrestore(&podev->lock, flags);
 
+	qcedev_areq->timed_out = false;
 	if (ret == 0)
 		wait = wait_for_completion_timeout(&qcedev_areq->complete,
 				msecs_to_jiffies(MAX_CRYPTO_WAIT_TIME));
@@ -782,7 +835,14 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 					current_req_info);
 		print_sts = true;
 		qcedev_check_crypto_status(qcedev_areq, podev->qce, print_sts);
-		qce_manage_timeout(podev->qce, current_req_info);
+		qcedev_areq->timed_out = true;
+		ret = qce_manage_timeout(podev->qce, current_req_info);
+		if (ret) {
+			pr_err("%s: error during manage timeout\n", __func__);
+			qcedev_areq->err = -EIO;
+			return qcedev_areq->err;
+		}
+		tasklet_schedule(&podev->done_tasklet);
 		if (qcedev_areq->offload_cipher_op_req.err !=
 						QCEDEV_OFFLOAD_NO_ERROR)
 			return 0;
@@ -2154,7 +2214,7 @@ long qcedev_ioctl(struct file *file,
 			err = -EINVAL;
 			goto exit_free_qcedev_areq;
 		}
-
+		qcedev_areq->offload_cipher_op_req.err = QCEDEV_OFFLOAD_NO_ERROR;
 		err = qcedev_smmu_ablk_offload_cipher(qcedev_areq, handle);
 		if (err)
 			goto exit_free_qcedev_areq;
@@ -2366,7 +2426,9 @@ long qcedev_ioctl(struct file *file,
 				goto exit_free_qcedev_areq;
 			}
 
-			if (map_buf.num_fds > QCEDEV_MAX_BUFFERS) {
+			if (map_buf.num_fds > ARRAY_SIZE(map_buf.fd)) {
+				pr_err("%s: err: num_fds = %d exceeds max value\n",
+							__func__, map_buf.num_fds);
 				err = -EINVAL;
 				goto exit_free_qcedev_areq;
 			}
@@ -2404,6 +2466,12 @@ long qcedev_ioctl(struct file *file,
 			if (copy_from_user(&unmap_buf,
 				(void __user *)arg, sizeof(unmap_buf))) {
 				err = -EFAULT;
+				goto exit_free_qcedev_areq;
+			}
+			if (unmap_buf.num_fds > ARRAY_SIZE(unmap_buf.fd)) {
+				pr_err("%s: err: num_fds = %d exceeds max value\n",
+							__func__, unmap_buf.num_fds);
+				err = -EINVAL;
 				goto exit_free_qcedev_areq;
 			}
 
@@ -2519,13 +2587,21 @@ static int qcedev_probe_device(struct platform_device *pdev)
 		rc = -ENODEV;
 		goto exit_scale_busbandwidth;
 	}
+	podev->qce = handle;
+
+	rc = qce_set_irqs(podev->qce, false);
+	if (rc) {
+		pr_err("%s: could not disable bam irqs, ret = %d\n",
+				__func__, rc);
+		goto exit_scale_busbandwidth;
+	}
+
 	rc = icc_set_bw(podev->icc_path, 0, 0);
 	if (rc) {
 		pr_err("%s Unable to set to low bandwidth\n", __func__);
 		goto exit_qce_close;
 	}
 
-	podev->qce = handle;
 	podev->pdev = pdev;
 	platform_set_drvdata(pdev, podev);
 
@@ -2640,6 +2716,12 @@ static int qcedev_suspend(struct platform_device *pdev, pm_message_t state)
 
 	mutex_lock(&qcedev_sent_bw_req);
 	if (podev->high_bw_req_count) {
+		ret = qce_set_irqs(podev->qce, false);
+		if (ret) {
+			pr_err("%s: could not disable bam irqs, ret = %d\n",
+					__func__, ret);
+			goto suspend_exit;
+		}
 		ret = qcedev_control_clocks(podev, false);
 		if (ret)
 			goto suspend_exit;
@@ -2665,6 +2747,12 @@ static int qcedev_resume(struct platform_device *pdev)
 		ret = qcedev_control_clocks(podev, true);
 		if (ret)
 			goto resume_exit;
+		ret = qce_set_irqs(podev->qce, true);
+		if (ret) {
+			pr_err("%s: could not enable bam irqs, ret = %d\n",
+					__func__, ret);
+			qcedev_control_clocks(podev, false);
+		}
 	}
 
 resume_exit:

@@ -1,6 +1,8 @@
 gh_virt_wdt.ko
 qcom-pmu-lib.ko
 qcom_wdt_core.ko
+dcvs_fp.ko
+qcom-dcvs.ko
 clk-dummy.ko
 clk-rpmh.ko
 clk-qcom.ko
@@ -15,6 +17,7 @@ qcom-cpufreq-hw.ko
 sched-walt.ko
 sched-walt-debug.ko
 qnoc-parrot.ko
+qnoc-ravelin.ko
 qcom_wdt_core.ko
 icc-rpmh.ko
 qcom_ipc_logging.ko
@@ -86,3 +89,4 @@ ufshcd-crypto-qti.ko
 tmecom-intf.ko
 cqhci-crypto-qti.ko
 bcl_pmic5.ko
+dispcc-ravelin.ko

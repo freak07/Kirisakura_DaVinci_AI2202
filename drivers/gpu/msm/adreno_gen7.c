@@ -120,6 +120,10 @@ void gen7_cp_init_cmds(struct adreno_device *adreno_dev, u32 *cmds)
 	/* Enable the register init list with the spinlock */
 	mask |= BIT(8);
 
+	/* By default DMS is enabled from CP side, disable it if not supported */
+	if (!adreno_dev->dms_enabled)
+		mask |= BIT(11);
+
 	cmds[i++] = cp_type7_packet(CP_ME_INIT, 7);
 
 	/* Enabled ordinal mask */
@@ -200,6 +204,7 @@ int gen7_init(struct adreno_device *adreno_dev)
 
 	adreno_dev->highest_bank_bit = gen7_core->highest_bank_bit;
 	adreno_dev->gmu_hub_clk_freq = freq ? freq : 150000000;
+	adreno_dev->bcl_data = gen7_core->bcl_data;
 
 	adreno_dev->cooperative_reset = ADRENO_FEATURE(adreno_dev,
 			ADRENO_COOP_RESET);
@@ -249,7 +254,7 @@ static void gen7_protect_init(struct adreno_device *adreno_dev)
 
 #define RBBM_CLOCK_CNTL_ON 0x8aa8aa82
 #define GMU_AO_CGC_MODE_CNTL 0x00020000
-#define GEN7_6_0_GMU_AO_CGC_MODE_CNTL 0x00020222
+#define GEN7_6_0_GMU_AO_CGC_MODE_CNTL 0x00020202
 #define GMU_AO_CGC_DELAY_CNTL 0x00010111
 #define GMU_AO_CGC_HYST_CNTL 0x00005555
 
@@ -420,10 +425,6 @@ int gen7_start(struct adreno_device *adreno_dev)
 	kgsl_regmap_multi_write(&device->regmap, gen7_core->gbif,
 		gen7_core->gbif_count);
 
-	if (gen7_core->qos_value)
-		kgsl_regwrite(device, GEN7_RBBM_GBIF_CLIENT_QOS_CNTL,
-			gen7_core->qos_value[adreno_dev->cur_rb->id]);
-
 	kgsl_regwrite(device, GEN7_UCHE_GBIF_GX_CONFIG, 0x10240e0);
 
 	/* Make all blocks contribute to the GPU BUSY perf counter */
@@ -470,6 +471,11 @@ int gen7_start(struct adreno_device *adreno_dev)
 	/* Turn on the IFPC counter (countable 4 on XOCLK4) */
 	kgsl_regwrite(device, GEN7_GMU_CX_GMU_POWER_COUNTER_SELECT_1,
 			FIELD_PREP(GENMASK(7, 0), 0x4));
+
+	/* Turn on counter to count total time spent in BCL throttle */
+	if (adreno_dev->bcl_enabled && adreno_is_gen7_6_0(adreno_dev))
+		kgsl_regrmw(device, GEN7_GMU_CX_GMU_POWER_COUNTER_SELECT_1, GENMASK(15, 8),
+				FIELD_PREP(GENMASK(15, 8), 0x26));
 
 	if (of_property_read_u32(device->pdev->dev.of_node,
 		"qcom,min-access-length", &mal))
@@ -615,7 +621,7 @@ void gen7_spin_idle_debug(struct adreno_device *adreno_dev,
 
 	dev_err(device->dev, " hwfault=%8.8X\n", hwfault);
 
-	kgsl_device_snapshot(device, NULL, false);
+	kgsl_device_snapshot(device, NULL, NULL, false);
 }
 
 /*
@@ -973,13 +979,18 @@ static const char *const uche_client[] = {
 	"BV_HLSQ", "BV_PC", "BV_LRZ", "BV_TP"
 };
 
+static const char *const uche_lpac_client[] = {
+	"-", "SP_LPAC", "-", "-", "HLSQ_LPAC", "-", "-", "TP_LPAC"
+};
+
 #define SCOOBYDOO 0x5c00bd00
 
 static const char *gen7_fault_block_uche(struct kgsl_device *device,
-		unsigned int mid)
+		char *str, int size, bool lpac)
 {
-	unsigned int uche_client_id;
-	static char str[20];
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	unsigned int uche_client_id = adreno_dev->uche_client_pf;
+	const char *uche_client_str, *fault_block;
 
 	/*
 	 * Smmu driver takes a vote on CX gdsc before calling the kgsl
@@ -989,28 +1000,44 @@ static const char *gen7_fault_block_uche(struct kgsl_device *device,
 	 * here, try to lock device mutex and return if it fails.
 	 */
 	if (!mutex_trylock(&device->mutex))
-		return "UCHE: unknown";
+		goto regread_fail;
 
 	if (!kgsl_state_is_awake(device)) {
 		mutex_unlock(&device->mutex);
-		return "UCHE: unknown";
+		goto regread_fail;
 	}
 
 	kgsl_regread(device, GEN7_UCHE_CLIENT_PF, &uche_client_id);
 	mutex_unlock(&device->mutex);
 
 	/* Ignore the value if the gpu is in IFPC */
-	if (uche_client_id == SCOOBYDOO)
-		return "UCHE: unknown";
+	if (uche_client_id == SCOOBYDOO) {
+		uche_client_id = adreno_dev->uche_client_pf;
+		goto regread_fail;
+	}
 
 	/* UCHE client id mask is bits [6:0] */
 	uche_client_id &= GENMASK(6, 0);
-	if (uche_client_id >= ARRAY_SIZE(uche_client))
-		return "UCHE: Unknown";
 
-	snprintf(str, sizeof(str), "UCHE: %s",
-			uche_client[uche_client_id]);
+regread_fail:
+	if (lpac) {
+		fault_block = "UCHE_LPAC";
+		if (uche_client_id >= ARRAY_SIZE(uche_lpac_client))
+			goto fail;
+		uche_client_str = uche_lpac_client[uche_client_id];
+	} else {
+		fault_block = "UCHE";
+		if (uche_client_id >= ARRAY_SIZE(uche_client))
+			goto fail;
+		uche_client_str = uche_client[uche_client_id];
+	}
 
+	snprintf(str, size, "%s: %s", fault_block, uche_client_str);
+	return str;
+
+fail:
+	snprintf(str, size, "%s: Unknown (client_id: %u)",
+			fault_block, uche_client_id);
 	return str;
 }
 
@@ -1018,23 +1045,31 @@ static const char *gen7_iommu_fault_block(struct kgsl_device *device,
 		unsigned int fsynr1)
 {
 	unsigned int mid = fsynr1 & 0xff;
+	static char str[36];
 
 	switch (mid) {
 	case 0x0:
 		return "CP";
+	case 0x1:
+		return "UCHE: Unknown";
 	case 0x2:
-		return "UCHE_LPAC";
+		return "UCHE_LPAC: Unknown";
 	case 0x3:
-		return gen7_fault_block_uche(device, mid);
+		return gen7_fault_block_uche(device, str, sizeof(str), false);
 	case 0x4:
 		return "CCU";
-	case 0x6:
+	case 0x5:
 		return "Flag cache";
+	case 0x6:
+		return "PREFETCH";
 	case 0x7:
 		return "GMU";
+	case 0x8:
+		return gen7_fault_block_uche(device, str, sizeof(str), true);
 	}
 
-	return "Unknown";
+	snprintf(str, sizeof(str), "Unknown (mid: %u)", mid);
+	return str;
 }
 
 static void gen7_cp_callback(struct adreno_device *adreno_dev, int bit)
@@ -1382,7 +1417,18 @@ static void gen7_power_stats(struct adreno_device *adreno_dev,
 		c = counter_delta(device, GEN7_GMU_CX_GMU_POWER_COUNTER_XOCLK_3_L,
 			&busy->throttle_cycles[2]);
 
-		trace_kgsl_bcl_clock_throttling(a, b, c);
+		if (a || b || c)
+			trace_kgsl_bcl_clock_throttling(a, b, c);
+
+		if (adreno_is_gen7_6_0(adreno_dev)) {
+			u32 bcl_throttle = counter_delta(device,
+				GEN7_GMU_CX_GMU_POWER_COUNTER_XOCLK_5_L, &busy->bcl_throttle);
+			/*
+			 * This counts number of cycles throttled in XO cycles. Convert it to
+			 * micro seconds by dividing by XO freq which is 19.2MHz.
+			 */
+			adreno_dev->bcl_throttle_time_us += ((bcl_throttle * 10) / 192);
+		}
 	}
 }
 
@@ -1440,6 +1486,7 @@ const struct gen7_gpudev adreno_gen7_hwsched_gpudev = {
 		.add_to_va_minidump = gen7_hwsched_add_to_minidump,
 		.gx_is_on = gen7_gmu_gx_is_on,
 		.send_recurring_cmdobj = gen7_hwsched_send_recurring_cmdobj,
+		.context_destroy = gen7_hwsched_context_destroy,
 	},
 	.hfi_probe = gen7_hwsched_hfi_probe,
 	.hfi_remove = gen7_hwsched_hfi_remove,

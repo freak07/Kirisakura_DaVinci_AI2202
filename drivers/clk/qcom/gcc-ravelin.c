@@ -48,7 +48,7 @@ enum {
 };
 
 static const struct pll_vco lucid_evo_vco[] = {
-	{ 249600000, 2000000000, 0 },
+	{ 249600000, 2020000000, 0 },
 };
 
 static struct clk_alpha_pll gcc_gpll0 = {
@@ -74,7 +74,7 @@ static struct clk_alpha_pll gcc_gpll0 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -146,7 +146,7 @@ static struct clk_alpha_pll gcc_gpll1 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -174,7 +174,7 @@ static struct clk_alpha_pll gcc_gpll10 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -216,7 +216,7 @@ static struct clk_alpha_pll gcc_gpll3 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -244,7 +244,7 @@ static struct clk_alpha_pll gcc_gpll4 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -272,7 +272,7 @@ static struct clk_alpha_pll gcc_gpll9 = {
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
 				[VDD_NOMINAL] = 1800000000,
-				[VDD_HIGH] = 2000000000},
+				[VDD_HIGH] = 2020000000},
 		},
 	},
 };
@@ -2982,6 +2982,9 @@ static int gcc_ravelin_probe(struct platform_device *pdev)
 
 	/* Ignore the PMU clock disable signal for gcc_venus_ctl_axi_clk */
 	regmap_update_bits(regmap, gcc_venus_ctl_axi_clk.clkr.enable_reg, BIT(21), BIT(21));
+
+	regmap_update_bits(regmap, 0x36010, BIT(20), BIT(20));
+	regmap_update_bits(regmap, 0x36014, BIT(20), BIT(20));
 
 	clk_lucid_evo_pll_configure(&gcc_gpll3, regmap, &gcc_gpll3_config);
 
