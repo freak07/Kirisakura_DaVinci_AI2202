@@ -5506,7 +5506,7 @@ static int dwc3_msm_debug_init(struct dwc3_msm *mdwc)
 		dev_err(mdwc->dev, "Error getting ipc_log_ctxt\n");
 
 	snprintf(ipc_log_ctx_name, sizeof(ipc_log_ctx_name),
-				"%s_ep_events", ipc_log_name);
+				"%s_reg_dumps", ipc_log_name);
 	mdwc->dwc_dma_ipc_log_ctxt = ipc_log_context_create(2 * NUM_LOG_PAGES,
 					ipc_log_ctx_name, DWC3_MINIDUMP);
 	if (!mdwc->dwc_dma_ipc_log_ctxt)
@@ -5676,6 +5676,26 @@ static int dwc3_msm_parse_core_params(struct dwc3_msm *mdwc, struct device_node 
 	}
 
 	return ret;
+}
+
+static int dwc3_msm_smmu_fault_handler(struct iommu_domain *domain, struct device *dev,
+					unsigned long iova, int flags, void *data)
+{
+	struct dwc3_msm *mdwc = data;
+	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
+	const struct debugfs_reg32 *dwc3_regs = dwc->regset->regs;
+	int size = dwc->regset->nregs, i;
+
+	ipc_log_string(mdwc->dwc_dma_ipc_log_ctxt, "[Reg_Name: Offset\t Value]");
+	for (i = 0; i < size; i++)
+		dump_dwc3_regs(dwc3_regs[i].name, dwc3_regs[i].offset,
+					dwc3_readl(dwc->regs, dwc3_regs[i].offset));
+       /*
+	* Let the iommu core know we're not really handling this fault;
+	* we just use it to dump the registers for debugging purposes.
+	*/
+	return -ENOSYS;
+
 }
 
 typedef void (*dwc3_role_switch_fn)(bool);
@@ -6730,6 +6750,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 {
 	struct dwc3_msm *mdwc = container_of(w, struct dwc3_msm, sm_work.work);
 	struct dwc3 *dwc = NULL;
+	struct iommu_domain *dwc3_msm_domain;
 	bool work = false;
 	int ret = 0;
 	unsigned long delay = 0;
@@ -6769,6 +6790,14 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 		}
 
 		mdwc->drd_state = DRD_STATE_IDLE;
+
+		dwc3_msm_domain = iommu_get_domain_for_dev(&mdwc->dwc3->dev);
+		if (dwc3_msm_domain) {
+			iommu_set_fault_handler(dwc3_msm_domain, dwc3_msm_smmu_fault_handler, mdwc);
+			dev_info(mdwc->dev, "dwc3 msm iommu fault handler registered\n");
+		} else {
+			dev_err(mdwc->dev, "dwc3 msm iommu domain not available\n");
+		}
 
 		/* put controller and phy in suspend if no cable connected */
 		if (test_bit(ID, &mdwc->inputs) &&
