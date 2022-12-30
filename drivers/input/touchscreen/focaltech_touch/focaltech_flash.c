@@ -61,11 +61,25 @@ struct upgrade_module module_list[] = {
     {FTS_MODULE_ID, FTS_MODULE_NAME, fw_file, sizeof(fw_file)},
     {FTS_MODULE2_ID, FTS_MODULE2_NAME, fw_file2, sizeof(fw_file2)},
     {FTS_MODULE3_ID, FTS_MODULE3_NAME, fw_file3, sizeof(fw_file3)},
+	{FTS_MODULE2_ID, FTS_MODULE2_NAME, fw_file, sizeof(fw_file)},
+};
+
+struct upgrade_func upgrade_func_ft8720 = {
+	.ctype = {0x1C},
+	.fwveroff = 0x210E,
+	.fwcfgoff = 0x1000,
+	.appoff = 0x2000,
+	.licoff = 0x0000,
+	.appoff_handle_in_ic = true,
+	.pramboot_supported = false,
+	.new_return_value_from_ic = true,
+	.hid_supported = false,
 };
 
 struct upgrade_func *upgrade_func_list[] = {
 	&upgrade_func_ft5452,
 	&upgrade_func_ft5652,
+	&upgrade_func_ft8720,
 };
 
 struct fts_upgrade *fwupgrade;
@@ -1835,8 +1849,8 @@ static int fts_fwupg_get_module_info(struct fts_upgrade *upg)
 			}
 		}
 		if (i >= FTS_GET_MODULE_NUM) {
-			FTS_ERROR("no module id match, don't get file");
-			return -ENODATA;
+			info = &module_list[0];
+			FTS_ERROR("no module id match, default to use first module");
 		}
 	}
 
