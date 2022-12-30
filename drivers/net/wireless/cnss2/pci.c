@@ -4290,6 +4290,8 @@ int cnss_get_soc_info(struct device *dev, struct cnss_soc_info *info)
 	       sizeof(info->device_version));
 	memcpy(&info->dev_mem_info, &plat_priv->dev_mem_info,
 	       sizeof(info->dev_mem_info));
+	memcpy(&info->fw_build_id, &plat_priv->fw_build_id,
+	       sizeof(info->fw_build_id));
 
 	return 0;
 }
@@ -4670,6 +4672,16 @@ static int cnss_pci_assert_host_sol(struct cnss_pci_data *pci_priv)
 	return 0;
 }
 
+static void cnss_pci_mhi_reg_dump(struct cnss_pci_data *pci_priv)
+{
+	if (!cnss_pci_check_link_status(pci_priv))
+		cnss_mhi_debug_reg_dump(pci_priv);
+
+	cnss_pci_soc_scratch_reg_dump(pci_priv);
+	cnss_pci_dump_misc_reg(pci_priv);
+	cnss_pci_dump_shadow_reg(pci_priv);
+}
+
 int cnss_pci_force_fw_assert_hdlr(struct cnss_pci_data *pci_priv)
 {
 	int ret;
@@ -4688,12 +4700,8 @@ int cnss_pci_force_fw_assert_hdlr(struct cnss_pci_data *pci_priv)
 
 	cnss_auto_resume(&pci_priv->pci_dev->dev);
 
-	if (!cnss_pci_check_link_status(pci_priv))
-		cnss_mhi_debug_reg_dump(pci_priv);
-
-	cnss_pci_soc_scratch_reg_dump(pci_priv);
-	cnss_pci_dump_misc_reg(pci_priv);
-	cnss_pci_dump_shadow_reg(pci_priv);
+	if (!pci_priv->is_smmu_fault)
+		cnss_pci_mhi_reg_dump(pci_priv);
 
 	/* If link is still down here, directly trigger link down recovery */
 	ret = cnss_pci_check_link_status(pci_priv);
@@ -4704,6 +4712,10 @@ int cnss_pci_force_fw_assert_hdlr(struct cnss_pci_data *pci_priv)
 
 	ret = cnss_pci_set_mhi_state(pci_priv, CNSS_MHI_TRIGGER_RDDM);
 	if (ret) {
+		if (pci_priv->is_smmu_fault) {
+			cnss_pci_mhi_reg_dump(pci_priv);
+			pci_priv->is_smmu_fault = false;
+		}
 		if (!test_bit(CNSS_MHI_POWER_ON, &pci_priv->mhi_state) ||
 		    test_bit(CNSS_MHI_POWERING_OFF, &pci_priv->mhi_state)) {
 			cnss_pr_dbg("MHI is not powered on, ignore RDDM failure\n");
@@ -4716,6 +4728,11 @@ int cnss_pci_force_fw_assert_hdlr(struct cnss_pci_data *pci_priv)
 		cnss_schedule_recovery(&pci_priv->pci_dev->dev,
 				       CNSS_REASON_DEFAULT);
 		return ret;
+	}
+
+	if (pci_priv->is_smmu_fault) {
+		cnss_pci_mhi_reg_dump(pci_priv);
+		pci_priv->is_smmu_fault = false;
 	}
 
 	if (!test_bit(CNSS_DEV_ERR_NOTIFY, &plat_priv->driver_state)) {
@@ -4920,7 +4937,6 @@ void cnss_pci_collect_dump_info(struct cnss_pci_data *pci_priv, bool in_panic)
 		cnss_pci_dump_debug_reg(pci_priv);
 		return;
 	}
-
 	cnss_rddm_trigger_check(pci_priv);
 	fw_image = pci_priv->mhi_ctrl->fbc_image;
 	rddm_image = pci_priv->mhi_ctrl->rddm_image;
