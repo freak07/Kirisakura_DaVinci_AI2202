@@ -1573,14 +1573,8 @@ static int cnss_rddm_trigger_debug(struct cnss_pci_data *pci_priv)
 {
 	int read_val, ret;
 
-	switch (pci_priv->device_id) {
-		case QCA6490_DEVICE_ID:
-		case KIWI_DEVICE_ID:
-			break;
-		default:
-			cnss_pr_err("RDDM Trigger debug not supported");
-			return -EOPNOTSUPP;
-	}
+	if (!pci_priv || pci_priv->device_id != QCA6490_DEVICE_ID)
+		return -EOPNOTSUPP;
 
 	if (cnss_pci_check_link_status(pci_priv))
 		return -EINVAL;
@@ -1602,14 +1596,8 @@ static int cnss_rddm_trigger_check(struct cnss_pci_data *pci_priv)
 	int read_val, ret;
 	u32 pbl_stage, sbl_log_start, sbl_log_size, pbl_wlan_boot_cfg;
 
-	switch (pci_priv->device_id) {
-		case QCA6490_DEVICE_ID:
-		case KIWI_DEVICE_ID:
-			break;
-		default:
-			cnss_pr_err("RDDM Trigger check not supported");
-			return -EOPNOTSUPP;
-	}
+	if (!pci_priv || pci_priv->device_id != QCA6490_DEVICE_ID)
+		return -EOPNOTSUPP;
 
 	if (cnss_pci_check_link_status(pci_priv))
 		return -EINVAL;
