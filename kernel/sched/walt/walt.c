@@ -1074,7 +1074,7 @@ static void fixup_busy_time(struct task_struct *p, int new_cpu)
 		 * and is in a pending state, do not push a migration
 		 * job, because all magic will have been done anyway.
 		 */
-		if (!(atomic_read(&walt_cpufreq_irq_work.flags) & IRQ_WORK_PENDING)) {
+		if (!(irq_work_is_pending(&walt_cpufreq_irq_work))) {
 			raw_spin_lock(&speedchange_cpumask_lock);
 			cpumask_set_cpu(task_cpu(p), &speedchange_cpumask);
 			cpumask_set_cpu(new_cpu, &speedchange_cpumask);
