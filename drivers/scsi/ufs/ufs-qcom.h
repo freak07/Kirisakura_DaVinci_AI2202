@@ -490,6 +490,11 @@ struct ufs_qcom_host {
 #ifdef CONFIG_SCSI_UFS_ASUS	
 	struct asus_ufs_info ufs_info;
 #endif
+	atomic_t hi_pri_en;
+	atomic_t therm_mitigation;
+	cpumask_t perf_mask;
+	cpumask_t def_mask;
+	bool irq_affinity_support;
 };
 
 static inline u32
