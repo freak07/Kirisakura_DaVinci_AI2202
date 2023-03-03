@@ -1080,18 +1080,12 @@ static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 	struct geni_i2c_dev *gi2c = i2c_get_adapdata(adap);
 	int i, ret = 0, timeout = 0;
 	struct msm_gpi_tre *lock_t = NULL;
-	struct msm_gpi_tre *unlock_t = NULL;
 	struct msm_gpi_tre *cfg0_t = NULL;
 
 	if (!gi2c->req_chan) {
 		ret = geni_i2c_gsi_request_channel(gi2c);
 		if (ret)
 			return ret;
-	}
-
-	if (gi2c->is_shared) {
-		lock_t = setup_lock_tre(gi2c);
-		unlock_t = setup_unlock_tre(gi2c);
 	}
 
 	if (!gi2c->cfg_sent)
@@ -1123,15 +1117,16 @@ static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 
 		if (!gi2c->cfg_sent)
 			segs++;
-		if (gi2c->is_shared && (i == 0 || i == num-1)) {
+		if (gi2c->is_shared && (i == 0)) {
 			segs++;
-			if (num == 1)
-				segs++;
 			sg_init_table(gi2c->tx_sg, segs);
-			if (i == 0)
+			if (i == 0) {
 				/* Send lock tre for first transfer in a msg */
+				lock_t = setup_lock_tre(gi2c);
 				sg_set_buf(&gi2c->tx_sg[index++], lock_t,
 					sizeof(gi2c->lock_t));
+				I2C_LOG_DBG(gi2c->ipcl, false, gi2c->dev, "gsi_lock\n");
+			}
 		} else {
 			sg_init_table(gi2c->tx_sg, segs);
 		}
@@ -1209,11 +1204,6 @@ static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 							  sizeof(gi2c->tx_t));
 		}
 
-		if (gi2c->is_shared && i == num-1) {
-			/* Send unlock tre at the end of last transfer */
-			sg_set_buf(&gi2c->tx_sg[index++],
-				unlock_t, sizeof(gi2c->unlock_t));
-		}
 
 		gi2c->tx_desc =
 		geni_i2c_prep_desc(gi2c, gi2c->tx_c, segs, tx_chan);
@@ -1251,9 +1241,18 @@ static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 					}
 			}
 		}
+
+		if ((gi2c->is_shared && (i == num-1)) && (!gi2c->err)) {
+			/* Send unlock tre at the end of last transfer */
+			I2C_LOG_DBG(gi2c->ipcl, false, gi2c->dev, "gsi_unlock\n");
+			geni_i2c_unlock_bus(gi2c);
+		}
+
 geni_i2c_err_prep_sg:
 		if (gi2c->err) {
 			if (!gi2c->is_le_vm) {
+				I2C_LOG_DBG(gi2c->ipcl, false, gi2c->dev,
+						"gpi_terminate\n");
 				dmaengine_terminate_all(gi2c->tx_c);
 				gi2c->cfg_sent = 0;
 			} else {
@@ -1982,23 +1981,20 @@ static int geni_i2c_resume_early(struct device *device)
 	return 0;
 }
 
-static int geni_i2c_gpi_pause_resume(struct geni_i2c_dev *gi2c, bool flag)
+static int geni_i2c_gpi_pause_resume(struct geni_i2c_dev *gi2c, bool is_suspend)
 {
-	int tx_ret = 0, rx_ret = 0;
+	int tx_ret = 0;
 
-	if ((gi2c->tx_c != NULL) && (gi2c->rx_c != NULL)) {
-		if (flag) {
+	if (gi2c->tx_c) {
+		if (is_suspend)
 			tx_ret = dmaengine_pause(gi2c->tx_c);
-			rx_ret = dmaengine_pause(gi2c->rx_c);
-		} else {
+		else
 			tx_ret = dmaengine_resume(gi2c->tx_c);
-			rx_ret = dmaengine_resume(gi2c->rx_c);
-		}
 
-		if (tx_ret || rx_ret) {
+		if (tx_ret) {
 			I2C_LOG_ERR(gi2c->ipcl, true, gi2c->dev,
-			"%s failed: tx:%d rx:%d flag:%d\n",
-			__func__, tx_ret, rx_ret, flag);
+				"%s failed: tx:%d status:%d\n",
+				__func__, tx_ret, is_suspend);
 			return -EINVAL;
 		}
 	}
