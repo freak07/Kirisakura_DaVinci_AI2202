@@ -27,7 +27,6 @@
 #include "adreno.h"
 #include "adreno_gen7.h"
 #include "adreno_trace.h"
-#include "kgsl_bus.h"
 #include "kgsl_device.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
@@ -60,6 +59,32 @@ static struct gmu_vma_entry gen7_gmu_vma[] = {
 			.size = SZ_512M,
 			.next_va = 0xc0000000,
 		},
+};
+
+static u32 gen7_rscc_tcsm_drv0_status_reglist[] = {
+	GEN7_RSCC_TCS0_DRV0_STATUS,
+	GEN7_RSCC_TCS1_DRV0_STATUS,
+	GEN7_RSCC_TCS2_DRV0_STATUS,
+	GEN7_RSCC_TCS3_DRV0_STATUS,
+	GEN7_RSCC_TCS4_DRV0_STATUS,
+	GEN7_RSCC_TCS5_DRV0_STATUS,
+	GEN7_RSCC_TCS6_DRV0_STATUS,
+	GEN7_RSCC_TCS7_DRV0_STATUS,
+	GEN7_RSCC_TCS8_DRV0_STATUS,
+	GEN7_RSCC_TCS9_DRV0_STATUS,
+};
+
+static u32 gen7_6_0_rscc_tcsm_drv0_status_reglist[] = {
+	GEN7_6_0_RSCC_TCS0_DRV0_STATUS,
+	GEN7_6_0_RSCC_TCS1_DRV0_STATUS,
+	GEN7_6_0_RSCC_TCS2_DRV0_STATUS,
+	GEN7_6_0_RSCC_TCS3_DRV0_STATUS,
+	GEN7_6_0_RSCC_TCS4_DRV0_STATUS,
+	GEN7_6_0_RSCC_TCS5_DRV0_STATUS,
+	GEN7_6_0_RSCC_TCS6_DRV0_STATUS,
+	GEN7_6_0_RSCC_TCS7_DRV0_STATUS,
+	GEN7_6_0_RSCC_TCS8_DRV0_STATUS,
+	GEN7_6_0_RSCC_TCS9_DRV0_STATUS,
 };
 
 static ssize_t log_stream_enable_store(struct kobject *kobj,
@@ -642,26 +667,18 @@ static int gen7_complete_rpmh_votes(struct gen7_gmu_device *gmu,
 		u32 timeout)
 {
 	struct adreno_device *adreno_dev = gen7_gmu_to_adreno(gmu);
-	int ret = 0;
+	int i, ret = 0;
 
 	if (adreno_is_gen7_6_0(adreno_dev)) {
-		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_6_0_RSCC_TCS0_DRV0_STATUS,
-				BIT(0), timeout, BIT(0));
-		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_6_0_RSCC_TCS1_DRV0_STATUS,
-				BIT(0), timeout, BIT(0));
-		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_6_0_RSCC_TCS2_DRV0_STATUS,
-				BIT(0), timeout, BIT(0));
-		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_6_0_RSCC_TCS3_DRV0_STATUS,
-				BIT(0), timeout, BIT(0));
+		for (i = 0; i < ARRAY_SIZE(gen7_6_0_rscc_tcsm_drv0_status_reglist); i++)
+			ret |= gen7_timed_poll_check_rscc(gmu,
+					gen7_6_0_rscc_tcsm_drv0_status_reglist[i],
+					BIT(0), timeout, BIT(0));
 	} else {
-		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS0_DRV0_STATUS,
-				BIT(0), timeout, BIT(0));
-		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS1_DRV0_STATUS,
-				BIT(0), timeout, BIT(0));
-		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS2_DRV0_STATUS,
-				BIT(0), timeout, BIT(0));
-		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS3_DRV0_STATUS,
-				BIT(0), timeout, BIT(0));
+		for (i = 0; i < ARRAY_SIZE(gen7_rscc_tcsm_drv0_status_reglist); i++)
+			ret |= gen7_timed_poll_check_rscc(gmu,
+					gen7_rscc_tcsm_drv0_status_reglist[i],
+					BIT(0), timeout, BIT(0));
 	}
 
 	if (ret)
@@ -2045,8 +2062,6 @@ static int gen7_gmu_bus_set(struct adreno_device *adreno_dev, int buslevel,
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	int ret = 0;
 
-	kgsl_icc_set_tag(pwr, buslevel);
-
 	if (buslevel != pwr->cur_buslevel) {
 		ret = gen7_gmu_dcvs_set(adreno_dev, INVALID_DCVS_IDX, buslevel);
 		if (ret)
@@ -2899,7 +2914,7 @@ static void gmu_idle_check(struct work_struct *work)
 	if (test_bit(GMU_DISABLE_SLUMBER, &device->gmu_core.flags))
 		goto done;
 
-	if (atomic_read(&device->active_cnt)) {
+	if (atomic_read(&device->active_cnt) || time_is_after_jiffies(device->idle_jiffies)) {
 		kgsl_pwrscale_update(device);
 		kgsl_start_idle_timer(device);
 		goto done;
