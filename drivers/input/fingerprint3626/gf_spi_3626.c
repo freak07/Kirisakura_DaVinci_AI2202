@@ -51,7 +51,10 @@
 #include "gf_spi.h"
 #include "gf_wakelock.h"
 
+#ifdef CONFIG_UCI_NOTIFICATIONS
 #include <linux/notification/notification.h>
+#include <linux/uci/uci.h>
+#endif
 
 #if defined(USE_SPI_BUS)
 #include <linux/spi/spi.h>
@@ -814,20 +817,47 @@ static const struct file_operations gf_fops = {
 #endif
 };
 
-static bool prox_overwrite = true;
-module_param(prox_overwrite, bool, 0644);
 
 #ifdef CONFIG_UCI_NOTIFICATIONS
+static bool prox_overwrite = false;
+static bool in_proximity = false;
+static bool screen_on = true;
+
 static void ntf_listener(char* event, int num_param, char* str_param)
 {
 	struct gf_dev *gf_dev = &gf;
+	bool new_in_proximity = in_proximity;
+	bool new_screen_on = screen_on;
         if (!strcmp(event,NTF_EVENT_PROXIMITY)) { // proximity
-                if (!!num_param && prox_overwrite == true ) {
-                        gf_disable_irq(gf_dev);
-                } else{
-                        gf_enable_irq(gf_dev);
-                }
+		new_in_proximity = !!num_param;
 	}
+        if (!strcmp(event,NTF_EVENT_SLEEP)) {
+                new_screen_on = false;
+        }
+        if (!strcmp(event,NTF_EVENT_WAKE_BY_USER) ||
+                !strcmp(event,NTF_EVENT_WAKE_BY_FRAMEWORK)
+        ) {
+                new_screen_on = true;
+        }
+
+
+	if (in_proximity != new_in_proximity || new_screen_on != screen_on) {
+		// change detected
+		in_proximity = new_in_proximity;
+		screen_on = new_screen_on;
+		if (prox_overwrite && in_proximity && !screen_on) {
+			gf_disable_irq(gf_dev);
+		} else {
+			// default to enable fp irq: 
+			//    when feature unused, out of proximity or screen is on
+			gf_enable_irq(gf_dev);
+		}
+	}
+}
+
+
+static void uci_user_listener(void) {
+	prox_overwrite = uci_get_user_property_int_mm("block_power_key_in_pocket", prox_overwrite, 0, 1);
 }
 #endif
 
@@ -948,7 +978,10 @@ static int gf_probe(struct platform_device *pdev)
 	gf_dev->irq_enabled = 1;
 	gf_disable_irq(gf_dev);
 
+#ifdef CONFIG_UCI_NOTIFICATIONS
 	ntf_add_listener(ntf_listener);
+	uci_add_user_listener(uci_user_listener);
+#endif
 
 	pr_info("[GF][%s] version V%d.%d.%02d.%02d\n", __func__, VER_MAJOR, VER_MINOR, PATCH_LEVEL, EXTEND_VER);
 	pr_err("[GF][%s] goodix fingerprint 3626 probe end\n", __func__);
