@@ -51,6 +51,8 @@
 #include "gf_spi.h"
 #include "gf_wakelock.h"
 
+#include <linux/notification/notification.h>
+
 #if defined(USE_SPI_BUS)
 #include <linux/spi/spi.h>
 #include <linux/spi/spidev.h>
@@ -349,6 +351,7 @@ static void gf_kernel_key_input(struct gf_dev *gf_dev, struct gf_key *gf_key)
 		/* add special key define */
 		key_input = gf_key->key;
 	}
+
 	pr_info("[GF][%s] received key event[%d], key=%d, value=%d\n",
 			__func__, key_input, gf_key->key, gf_key->value);
 
@@ -811,6 +814,23 @@ static const struct file_operations gf_fops = {
 #endif
 };
 
+static bool prox_overwrite = true;
+module_param(prox_overwrite, bool, 0644);
+
+#ifdef CONFIG_UCI_NOTIFICATIONS
+static void ntf_listener(char* event, int num_param, char* str_param)
+{
+	struct gf_dev *gf_dev = &gf;
+        if (!strcmp(event,NTF_EVENT_PROXIMITY)) { // proximity
+                if (!!num_param && prox_overwrite == true ) {
+                        gf_disable_irq(gf_dev);
+                } else{
+                        gf_enable_irq(gf_dev);
+                }
+	}
+}
+#endif
+
 static struct class *gf_class;
 #if defined(USE_SPI_BUS)
 static int gf_probe(struct spi_device *spi)
@@ -927,6 +947,8 @@ static int gf_probe(struct platform_device *pdev)
 	enable_irq_wake(gf_dev->irq);
 	gf_dev->irq_enabled = 1;
 	gf_disable_irq(gf_dev);
+
+	ntf_add_listener(ntf_listener);
 
 	pr_info("[GF][%s] version V%d.%d.%02d.%02d\n", __func__, VER_MAJOR, VER_MINOR, PATCH_LEVEL, EXTEND_VER);
 	pr_err("[GF][%s] goodix fingerprint 3626 probe end\n", __func__);
