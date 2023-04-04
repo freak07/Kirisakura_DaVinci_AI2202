@@ -12,6 +12,7 @@
 #include <linux/ktime.h>
 #include <linux/log2.h>
 #include <linux/module.h>
+#include <linux/notification/notification.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
@@ -90,6 +91,8 @@ struct pm8941_pwrkey {
 /* ASUS_BSP : long press power key + vol down key 6sec reset device +++ */
 static int boot_after_60sec = 0;
 static bool is_boot_after_60sec(void);
+
+static bool in_proximity = false;
 
 static int power_key_6s_running = 0;
 static int voldown_key_6s_running = 0;
@@ -199,6 +202,9 @@ module_param_call(pwrkey_mode,pwrkeyMode_function,param_get_int,&pwrkey_mode,064
 #endif
 //ASUS_BSP add module for powerkey-----------
 
+static bool prox_pb_overwrite = false;
+module_param(prox_pb_overwrite, bool, 0644);
+
 static irqreturn_t pm8941_pwrkey_irq(int irq, void *_data)
 {
 	struct pm8941_pwrkey *pwrkey = _data;
@@ -274,6 +280,10 @@ static irqreturn_t pm8941_pwrkey_irq(int irq, void *_data)
 // ASUS_BSP +++ keypad add wakeup for COS
     pm_wakeup_dev_event(pwrkey->dev, 1000, true);
 // ASUS_BSP --- keypad add wakeup for COS
+
+	if (in_proximity == true && prox_pb_overwrite == true){
+	printk("[mid_powerbtn]intercept\n");
+		return IRQ_HANDLED;}
 
 #if (defined(ASUS_FTM_BUILD) && (defined(ASUS_AI2202_PROJECT) ))
 //<ASUS-BSP>for add module for powerkey+++++++
@@ -454,6 +464,19 @@ void volDown_press_workqueue(struct work_struct *work)
 	}
 }
 /* ASUS_BSP : long press power key + vol down key 6sec reset device ---*/
+
+#ifdef CONFIG_UCI_NOTIFICATIONS
+static void ntf_listener(char* event, int num_param, char* str_param) {
+        if (!strcmp(event,NTF_EVENT_PROXIMITY)) { // proximity
+                if (!!num_param) {
+                        in_proximity = true;
+                } else{
+                        in_proximity = false;
+                }
+       }
+}
+#endif
+
 
 static int pm8941_pwrkey_probe(struct platform_device *pdev)
 {
@@ -639,6 +662,8 @@ static int pm8941_pwrkey_probe(struct platform_device *pdev)
 		printk(KERN_ERR"create printklog node is error\n");
 	}
 #endif
+
+	ntf_add_listener(ntf_listener);
 
 	/* ASUS_BSP : long press power key + vol down key 6sec reset device +++ */
 	timer_setup(&pwr_press_timer, pwr_press_timer_callback, 0);
