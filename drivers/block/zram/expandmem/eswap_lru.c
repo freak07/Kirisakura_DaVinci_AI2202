@@ -223,7 +223,8 @@ int zram_get_memcg_coldest_index(struct eswap_area *area,
 				 int *index, int max_cnt)
 {
 	int cnt = 0;
-	int i;
+	u32 i;
+	u32 tmp;
 	int invalid_cnt = 0;
 
 	if (!area) {
@@ -244,13 +245,12 @@ int zram_get_memcg_coldest_index(struct eswap_area *area,
 	}
 
 	eswap_lock_list(mcg_idx(area, mcg->id.id), area->obj_table);
-	eswap_list_for_each_entry_reverse(i,
+	eswap_list_for_each_entry_reverse_safe(i, tmp,
 		mcg_idx(area, mcg->id.id), area->obj_table) {
-		if (i >= area->nr_objs) {
+		if (i >= (u32)area->nr_objs) {
 			invalid_cnt++;
 			if (invalid_cnt >= max_cnt) {
 				eswap_print(LEVEL_ERR, "the number of invalid index exceeds %d mcgid = %d\n", max_cnt, mcg->id.id);
-				break;
 			}
 			continue;
 		}
@@ -313,8 +313,6 @@ int zram_rmap_get_extent_index(struct zram *zram,
 	int cnt = 0;
 	struct eswap_area *area;
 	int i;
-	int overwrite_cnt = 0;
-	int invalid_cnt = 0;
 	struct oem_zram_data *oem_zram = get_oem_zram(zram);
 
 	if (!oem_zram) {
@@ -341,33 +339,17 @@ int zram_rmap_get_extent_index(struct zram *zram,
 
 	eswap_lock_list(ext_idx(area, ext_id), area->obj_table);
 	eswap_list_for_each_entry(i, ext_idx(area, ext_id), area->obj_table) {
-		if (i >= area->nr_objs) {
-			eswap_print(LEVEL_DEBUG, "ext_id = %d index = %d invalid\n", ext_id, i);
-			invalid_cnt++;
-			if (invalid_cnt >= (int)EXTENT_MAX_OBJ_CNT) {
-				eswap_print(LEVEL_ERR, "the number of invalid index exceeds %d ext_id = %d\n", EXTENT_MAX_OBJ_CNT, ext_id);
-				break;
-			}
-			continue;
-		}
-		zram_slot_lock(zram, i);
-		if (zram_test_overwrite(zram, i, ext_id)) {
-			zram_slot_unlock(zram, i);
-			overwrite_cnt++;
-			eswap_print(LEVEL_DEBUG, "overwrite, ext_id = %d index = %d overwrite_cnt = %d cnt = %d\n", ext_id, i, overwrite_cnt, cnt);
-			if (overwrite_cnt >= (int)EXTENT_MAX_OBJ_CNT) {
-				eswap_print(LEVEL_ERR, "the number of overwrite exceeds %d ext_id = %d\n", EXTENT_MAX_OBJ_CNT, ext_id);
-				break;
-			}
-			continue;
-		}
-		zram_slot_unlock(zram, i);
-
-		index[cnt++] = i;
 		if (cnt >= (int)EXTENT_MAX_OBJ_CNT) {
-			eswap_print(LEVEL_WARN, "the number of extent exceeds %d ext_id = %d\n", EXTENT_MAX_OBJ_CNT, ext_id);
+			eswap_print(LEVEL_DEBUG, "the number of extent exceeds %d ext_id = %d\n", EXTENT_MAX_OBJ_CNT, ext_id);
+			WARN_ON_ONCE(1);
 			break;
 		}
+
+		if (i >= (u32)area->nr_objs) {
+			eswap_print(LEVEL_DEBUG, "ext_id = %d index = %d invalid\n", ext_id, i);
+			continue;
+		}
+		index[cnt++] = i;
 	}
 	eswap_unlock_list(ext_idx(area, ext_id), area->obj_table);
 

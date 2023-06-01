@@ -46,7 +46,22 @@ struct schedule_para {
 	struct io_priv priv;
 };
 
-#define GET_EXTENT_MAX_TIMES (100 * 1000)
+/*
+delay time = 50us, max delay time = 1s
+sleep time = 50ms
+*/
+#define MAX_DELAY_COUNT 20000
+const unsigned long delay_time = 50;
+const unsigned long sleep_time = 50;
+static void eswap_delay(int *delay_count)
+{
+	if ((*delay_count) < MAX_DELAY_COUNT) {
+		(*delay_count)++;
+		udelay(delay_time);
+	} else {
+		msleep(sleep_time);
+	}
+}
 
 static void eswap_memcg_iter(
 	int (*iter)(struct mem_cgroup *, void *), void *data)
@@ -444,6 +459,7 @@ static void eswap_zram_lru_del(struct zram *zram, u32 index)
 		zram_clear_flag(zram, index, ZRAM_MCGID_CLEAR);
 	}
 	if (zram_test_flag(zram, index, ZRAM_WB)) {
+		eswap_extent_objs_del(zram, index);
 		zram_rmap_erase(zram, index);
 		zram_clear_flag(zram, index, ZRAM_WB);
 		zram_set_memcg(zram, index, NULL);
@@ -498,15 +514,15 @@ static void eswap_untrack(struct zram *zram, u32 index)
 	 * 1. When the ZS object in the writeback or swapin, it can't be untrack
 	 * 2. Updata the stored size in memcg and ZRAM
 	 * 3. Remove ZRAM obj from LRU
-	 *
 	 */
+	int delay_count = 0;
 	if (!eswap_get_enable())
 		return;
 
 	while (zram_test_flag(zram, index, ZRAM_UNDER_WB) ||
 		zram_test_flag(zram, index, ZRAM_UNDER_FAULTOUT)) {
 		zram_slot_unlock(zram, index);
-		udelay(50);
+		eswap_delay(&delay_count);
 		zram_slot_lock(zram, index);
 	}
 
@@ -538,21 +554,39 @@ static void eswap_faultcheck_stat(struct zram *zram, u32 index)
 	}
 }
 
-static bool eswap_fault_out_check(struct zram *zram,
+static int eswap_fault_out_check(struct zram *zram,
 					u32 index, unsigned long *zentry)
 {
+	int delay_count = 0;
+
 	if (!eswap_get_enable())
-		return false;
+		return -ENOENT;
 
 	eswap_faultcheck_stat(zram, index);
 
 	if (!zram_test_flag(zram, index, ZRAM_WB))
-		return false;
+		return -ENOENT;
+
+	*zentry = zram_get_handle(zram, index);
+	while (zram_test_flag(zram, index, ZRAM_UNDER_FAULTOUT)) {
+		unsigned long addr;
+		zram_slot_unlock(zram, index);
+		eswap_delay(&delay_count);
+		zram_slot_lock(zram, index);
+		addr = zram_get_handle(zram, index);
+
+		if (!zram_test_flag(zram, index, ZRAM_WB))
+			return -ENOENT;
+		if (addr != *zentry) {
+			eswap_print(LEVEL_ERR, "addr changed, index = %d, old = %lx, new = %lx\n",
+					index, *zentry, addr);
+			return -EIO;
+		}
+	}
 
 	zram_set_flag(zram, index, ZRAM_UNDER_FAULTOUT);
-	*zentry = zram_get_handle(zram, index);
 	zram_slot_unlock(zram, index);
-	return true;
+	return 0;
 }
 
 static void eswap_fault_stat(struct zram *zram, u32 index)
@@ -580,7 +614,7 @@ static int eswap_fault_out_get_extent(struct zram *zram,
 						unsigned long zentry,
 						u32 index)
 {
-	int i = 0;
+	int delay_count = 0;
 	sched->io_buf.zram = zram;
 	sched->priv.zram = zram;
 	sched->io_buf.pool = NULL;
@@ -588,7 +622,7 @@ static int eswap_fault_out_get_extent(struct zram *zram,
 			&sched->io_buf, &sched->io_entry->manager_private);
 	if (unlikely(sched->io_entry->ext_id == -EBUSY)) {
 		/* The extent maybe in unexpected case, wait here */
-		for (i = 0; i < GET_EXTENT_MAX_TIMES; i++) {
+		while (1) {
 			/* The extent doesn't exist in eswap */
 			zram_slot_lock(zram, index);
 			if (!zram_test_flag(zram, index, ZRAM_WB)) {
@@ -605,12 +639,8 @@ static int eswap_fault_out_get_extent(struct zram *zram,
 				&sched->io_entry->manager_private);
 			if (likely(sched->io_entry->ext_id != -EBUSY))
 				break;
-			udelay(50);
+			eswap_delay(&delay_count);
 		}
-	}
-
-	if (i >= 1000) {
-		eswap_print(LEVEL_ERR, "get extent ext_id = %d index = %d num = %d\n", esentry_extid(zentry), index, i);
 	}
 
 	if (sched->io_entry->ext_id < 0) {
@@ -678,8 +708,9 @@ static int eswap_fault_out(struct zram *zram, u32 index)
 	struct schedule_para sched;
 	unsigned long zentry;
 
-	if (!eswap_fault_out_check(zram, index, &zentry))
-		return ret;
+	ret = eswap_fault_out_check(zram, index, &zentry);
+	if (ret)
+		return ret == -ENOENT ? 0 : ret;
 
 	sched.io_handler = eswap_init_plug(zram,
 				ESWAP_FAULT_OUT, &sched);
@@ -723,11 +754,6 @@ static bool eswap_delete(struct zram *zram, u32 index)
 		|| zram_test_flag(zram, index, ZRAM_UNDER_FAULTOUT)) {
 		return false;
 	}
-
-	if (!zram_test_flag(zram, index, ZRAM_WB))
-		return true;
-
-	eswap_extent_objs_del(zram, index);
 
 	return true;
 }

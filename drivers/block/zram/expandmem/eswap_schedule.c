@@ -55,6 +55,7 @@ struct eswap_segment {
 	struct eswap_io_req *req;
 	struct eswap_segment_time time;
 	u32 bio_result;
+	struct bio *bio;
 };
 
 struct eswap_io_req {
@@ -70,6 +71,12 @@ struct eswap_io_req {
 	int page_cnt;
 	int segment_cnt;
 	int nice;
+};
+
+struct eswap_zram_work {
+	struct work_struct work;
+	struct eswap_io_req *req;
+	struct eswap_segment *segment;
 };
 
 static bool eswap_check_entry_err(
@@ -314,6 +321,7 @@ static void eswap_io_end_work(struct work_struct *work)
 		container_of(work, struct eswap_segment, endio_work);
 	struct eswap_io_req *req = segment->req;
 	int old_nice = task_nice(current);
+	struct bio *bio = segment->bio;
 
 	if (unlikely(segment->bio_result)) {
 		eswap_io_err_proc(req, segment);
@@ -323,6 +331,10 @@ static void eswap_io_end_work(struct work_struct *work)
 	set_user_nice(current, req->nice);
 	eswap_io_entry_proc(segment);
 	eswap_io_end_wake_up(req);
+
+	if (bio) {
+		bio_put(bio);
+	}
 
 	kref_put_mutex(&req->refcount, eswap_io_req_release,
 		&req->refmutex);
@@ -349,9 +361,9 @@ static void eswap_end_io(struct bio *bio)
 		eswap_proc_write_workqueue : eswap_proc_read_workqueue;
 	segment->time.end_io = ktime_get();
 	segment->bio_result = bio->bi_status;
+	segment->bio = bio;
 
 	queue_work(workqueue, &segment->endio_work);
-	bio_put(bio);
 }
 
 static int eswap_submit_bio(struct eswap_segment *segment)
@@ -445,10 +457,21 @@ static bool eswap_check_io_para_err(struct eswap_io *io_para)
 	return false;
 }
 
+static void eswap_sync_read_submit_bio(struct work_struct *work) {
+	int ret;
+	struct eswap_zram_work *ezw = container_of(work, struct eswap_zram_work, work);
+	struct eswap_segment *segment = ezw->segment;
+	struct eswap_io_req *req = ezw->req;
+	ret = eswap_submit_bio(segment);
+	if (unlikely(ret))
+		eswap_segment_free(req, segment);
+
+}
+
 static int eswap_io_submit(struct eswap_io_req *req,
 	bool merge_flag)
 {
-	int ret;
+	int ret = 0;
 	struct eswap_segment *segment = req->segment;
 
 	if (!segment || ((merge_flag) && (segment->page_cnt < BIO_MAX_PAGES)))
@@ -456,9 +479,20 @@ static int eswap_io_submit(struct eswap_io_req *req,
 
 	eswap_limit_inflight(req);
 
-	ret = eswap_submit_bio(segment);
-	if (unlikely(ret))
-		eswap_segment_free(req, segment);
+	if (segment->req->io_para.scenario == ESWAP_RECLAIM_IN) {
+		ret = eswap_submit_bio(segment);
+		if (unlikely(ret))
+			eswap_segment_free(req, segment);
+	} else {
+		struct eswap_zram_work work;
+		work.req = req;
+		work.segment = segment;
+
+		INIT_WORK_ONSTACK(&work.work, eswap_sync_read_submit_bio);
+		queue_work(system_unbound_wq, &work.work);
+		flush_work(&work.work);
+		destroy_work_on_stack(&work.work);
+	}
 
 	req->segment = NULL;
 
@@ -571,8 +605,18 @@ static void eswap_stat_io_bytes(struct eswap_io_req *req)
 /* io_handler validity guaranteed by the caller */
 int eswap_plug_finish(void *io_handler)
 {
-	int ret;
-	struct eswap_io_req *req = (struct eswap_io_req *)io_handler;
+	int ret = 0;
+	struct eswap_io_req *req = NULL;
+	if (!io_handler) {
+		eswap_print(LEVEL_ERR, "io_handler is null\n");
+		return ret;
+	}
+
+	req = (struct eswap_io_req *)io_handler;
+	if (!req) {
+		eswap_print(LEVEL_ERR, "req is null\n");
+		return ret;
+	}
 
 	ret = eswap_io_submit(req, false);
 	if (unlikely(ret))
@@ -635,8 +679,7 @@ int eswap_schedule_init(void)
 	if (eswap_schedule_init_flag)
 		return 0;
 
-	eswap_proc_read_workqueue = alloc_workqueue("proc_eswap_read",
-		WQ_HIGHPRI | WQ_UNBOUND, 0);
+	eswap_proc_read_workqueue = alloc_workqueue("proc_eswap_read", WQ_HIGHPRI | WQ_UNBOUND, 0);
 	if (unlikely(!eswap_proc_read_workqueue))
 		return -EFAULT;
 
@@ -644,7 +687,6 @@ int eswap_schedule_init(void)
 		WQ_CPU_INTENSIVE, 0);
 	if (unlikely(!eswap_proc_write_workqueue)) {
 		destroy_workqueue(eswap_proc_read_workqueue);
-
 		return -EFAULT;
 	}
 

@@ -58,10 +58,13 @@ static inline int is_last_idx(int idx, int hidx, struct eswap_list_table *tab)
 
 #define eswap_list_for_each_entry(idx, hidx, tab) \
 	for ((idx) = next_idx((hidx), (tab)); \
-	     (idx) >= 0 && (idx) != (hidx); (idx) = next_idx((idx), (tab)))
+	     (idx) != (hidx); (idx) = next_idx((idx), (tab)))
 #define eswap_list_for_each_entry_reverse(idx, hidx, tab) \
 	for ((idx) = prev_idx((hidx), (tab)); \
-	     (idx) >= 0 && (idx) != (hidx); (idx) = prev_idx((idx), (tab)))
+	     (idx) != (hidx); (idx) = prev_idx((idx), (tab)))
+#define eswap_list_for_each_entry_reverse_safe(idx, tmp, hidx, tab) \
+	for ((idx) = prev_idx((hidx), (tab)), (tmp) = prev_idx((idx), (tab)); \
+	     (idx) != (hidx); (idx) = (tmp), (tmp) = prev_idx((idx), (tab)))
 
 unsigned short eswap_list_get_mcgid(int idx, struct eswap_list_table *table);
 void eswap_list_set_mcgid(int idx, struct eswap_list_table *table, int mcg_id);
