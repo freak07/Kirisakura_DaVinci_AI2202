@@ -1044,6 +1044,10 @@ static int fts_read_parse_touchdata(struct fts_ts_data *data)
             //FTS_INFO("restore report rate 240HZ");
             fts_write_reg(FTS_REG_REPORT_RATE, 0);
         }
+        if (touch_sample_overwrite == true) {
+				FTS_DEBUG("enter override touch mode, switch to 240HZ.");
+				fts_write_reg(FTS_REG_REPORT_RATE, 0);
+		}
         fts_wait_tp_to_valid();
         fts_ex_mode_recovery(data);
         fts_ex_fun_recovery(data);
@@ -1697,6 +1701,9 @@ static int fts_parse_dt(struct device *dev, struct fts_ts_platform_data *pdata)
     return 0;
 }
 
+bool touch_sample_overwrite = false;
+module_param(touch_sample_overwrite, bool, 0644);
+
 static void fts_ts_panel_notifier_callback(enum panel_event_notifier_tag tag,
 		 struct panel_event_notification *notification, void *client_data)
 {
@@ -1719,7 +1726,12 @@ static void fts_ts_panel_notifier_callback(enum panel_event_notifier_tag tag,
 #ifdef CONFIG_UCI
 		pr_info("%s uci screen state call %d... \n",__func__,0);
 		uci_screen_state(2);
+		
 #endif
+		if (touch_sample_overwrite == true) {
+				FTS_DEBUG("enter override core mode, switch to 240HZ.");
+				fts_write_reg(FTS_REG_REPORT_RATE, 0);
+		}
 		break;
 	case DRM_PANEL_EVENT_BLANK:
 		if (notification->notif_data.early_trigger) {
@@ -2398,6 +2410,11 @@ static int fts_ts_resume(struct device *dev)
         //FTS_INFO("restore report rate 240HZ");
         fts_write_reg(FTS_REG_REPORT_RATE, 0);
     }
+
+	if (touch_sample_overwrite == true) {
+				FTS_DEBUG("enter override resume mode, switch to 240HZ.");
+				fts_write_reg(FTS_REG_REPORT_RATE, 0);
+	}
 
     fts_wait_tp_to_valid();
     fts_ex_mode_recovery(ts_data);

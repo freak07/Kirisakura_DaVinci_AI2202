@@ -261,9 +261,14 @@ static ssize_t fts_game_mode_store(
         }
     } else if (FTS_SYSFS_ECHO_OFF(buf)) {
         if (ts_data->game_mode) {
-            FTS_DEBUG("exit game mode, switch to 120HZ.");
             ts_data->game_mode = DISABLE;
-            fts_write_reg(FTS_REG_REPORT_RATE, 1);
+			if (touch_sample_overwrite == true) {
+				FTS_DEBUG("enter override mode, switch to 240HZ.");
+				fts_write_reg(FTS_REG_REPORT_RATE, 0);
+			} else {
+				FTS_DEBUG("exit game mode, switch to 120HZ.");
+				fts_write_reg(FTS_REG_REPORT_RATE, 1);
+			}
         }
     }
 
